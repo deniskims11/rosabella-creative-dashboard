@@ -1,0 +1,61 @@
+name: Refresh Meta data
+
+on:
+  schedule:
+    # Every 4 hours.
+    - cron: '15 */4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Parser self-test
+        run: python scripts/parse_ad_name.py
+
+      # Until the Meta token exists this job no-ops rather than failing,
+      # so the repo does not sit permanently red.
+      - name: Check for credentials
+        id: creds
+        env:
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$META_ACCESS_TOKEN" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::META_ACCESS_TOKEN not set — skipping refresh. Add a Meta System User token (ads_read) as a repo secret to enable it."
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fetch Meta data
+        if: steps.creds.outputs.present == 'true'
+        env:
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+        run: python scripts/fetch_meta.py
+
+      - name: Commit refreshed data
+        if: steps.creds.outputs.present == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/data/latest.json
+          if git diff --cached --quiet; then
+            echo "No data changes."
+          else
+            git commit -m "chore(data): refresh Meta $(date -u +%Y-%m-%dT%H:%MZ)"
+            git push
+          fi
