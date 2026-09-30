@@ -61,9 +61,12 @@ ANGLES = {
     "highcortisol": "High Cortisol", "cortisol": "High Cortisol",
     "sleep": "Sleep", "bloating": "Bloating", "gut": "Gut Health",
     "joint": "Joint", "heart": "Heart Health", "hearthealth": "Heart Health",
-    "sale": "Sale", "flashsale": "Sale", "glutabenefits": "Glutathione Benefits",
+    "sale": "Sale", "glutabenefits": "Glutathione Benefits",
     "symptomstack": "Symptom Stack",
     "neuropathy": "Neuropathy", "liverhealth": "Liver Health",
+    "ldl": "High Cholesterol", "prostatehealth": "Prostate Health", "prostate": "Prostate Health",
+    "productquality": "Product Quality", "inflammation": "Inflammation",
+    "flash-sale": "Sale", "flashsale": "Sale",
 }
 
 AWARENESS = {"SA", "UA", "PDA", "PA", "PR", "UN", "MA", "TP1", "TP2", "TP3", "NN"}

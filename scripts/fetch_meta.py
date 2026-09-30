@@ -238,6 +238,7 @@ def rows_from_csv(paths: list, account: str = None) -> tuple[list, dict]:
             for r in csv.DictReader(fh):
                 g = lambda *ks: next((r[k] for k in ks if k in r and r[k] not in (None, "")), None)
                 ad_id = g("Ad ID", "Ad Id") or ""
+                adset = g("Ad set name", "Ad Set Name") or ""
                 link = g("Link clicks", "Link Clicks")
                 purchases = g("Purchases", "Website purchases")
                 if purchases is None and g("CVR Purchases") is not None:
@@ -245,10 +246,13 @@ def rows_from_csv(paths: list, account: str = None) -> tuple[list, dict]:
                     # exact integer in every export checked, so recover the count.
                     purchases = round(_f(g("CVR Purchases")) * _f(link))
                 value = g("Purchases conversion value", "Website purchases conversion value")
-                adset = g("Ad set name", "Ad Set Name") or ""
+                if value is None and ("Purchases conversion value" in r or "Website purchases conversion value" in r):
+                    value = 0   # column present, cell blank = no purchases, not "unknown"
                 rows.append({
                     "ad_name": g("Ad name", "Ad Name"), "ad_id": ad_id,
-                    "campaign_name": g("Campaign name", "Campaign Name"),
+                    # Exports without a campaign column: the ad set name carries the
+                    # product ("Beetroot testing | 31/08/26 | …"), so parse that instead.
+                    "campaign_name": g("Campaign name", "Campaign Name") or adset or None,
                     "account_id": (g("Account ID") or account or "").replace("act_", ""),
                     "spend": g("Amount spent (USD)", "Amount spent", "Amount Spent"),
                     "impressions": g("Impressions"),
@@ -257,7 +261,7 @@ def rows_from_csv(paths: list, account: str = None) -> tuple[list, dict]:
                     "actions": [{"action_type": PURCHASE_ACTION, "value": purchases or 0}],
                     "action_values": ([{"action_type": PURCHASE_ACTION, "value": value}]
                                       if value is not None else None),
-                    "created": (g("Ad creation date") or _adset_date(adset)
+                    "created": (g("Ad creation date", "Date created") or _adset_date(adset)
                                 or (g("Reporting starts") or "")[:10] or None),
                 })
     return rows, created
@@ -324,6 +328,14 @@ def main():
         "total_spend": round(spend, 2),
         "ads": ads,
     }
+    # Keep the payload lean: drop empty fields and duplicates of ad_name, keep
+    # only the top ad set/campaign. The front end treats missing keys as untagged.
+    for a in ads:
+        a["campaigns"] = a.get("campaigns", [])[:1]
+        a.pop("dedup_key", None)
+        for k in [k for k, v in a.items() if v is None or v == [] or v == [""]]:
+            del a[k]
+        a["metrics"] = {k: v for k, v in a["metrics"].items() if v is not None}
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(manifest, separators=(",", ":")))
     print(f"Wrote {len(ads)} creatives, ${spend:,.0f} spend → {OUT}")
