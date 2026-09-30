@@ -163,15 +163,18 @@ def normalise(rows: list, created: dict, thumbs: dict = None) -> list:
             "impressions": _f(r.get("impressions")),
             "clicks": _f(r.get("clicks")),
             "link_clicks": _f(r.get("inline_link_clicks")),
-            "rev": _action(r.get("action_values")),
+            "rev": None if r.get("action_values") is None else _action(r.get("action_values")),
             "txns": _action(r.get("actions")),
         }
         rec = by.get(name)
         if rec is None:
-            rec = by[name] = {"m": {k: 0.0 for k in m}, "ids": {}, "camps": {},
+            rec = by[name] = {"m": {k: (None if v is None else 0.0) for k, v in m.items()}, "ids": {}, "camps": {},
                               "accts": {}, "first": None}
         for k, v in m.items():
-            rec["m"][k] += v
+            if v is None or rec["m"][k] is None:
+                rec["m"][k] = None
+            else:
+                rec["m"][k] += v
         ad_id = str(r.get("ad_id") or "")
         rec["ids"][ad_id] = rec["ids"].get(ad_id, 0) + spend
         c = r.get("campaign_name") or ""
@@ -187,14 +190,15 @@ def normalise(rows: list, created: dict, thumbs: dict = None) -> list:
         camps = sorted(rec["camps"], key=lambda c: -rec["camps"][c])
         parsed = parse_ad_name(name, camps[0] if camps else None)
         m = rec["m"]
-        m["roas"] = round(m["rev"] / m["spend"], 4) if m["spend"] else 0
+        m["roas"] = (round(m["rev"] / m["spend"], 4) if m["spend"] else 0) if m["rev"] is not None else None
         m["cpm"] = round(m["spend"] / m["impressions"] * 1000, 4) if m["impressions"] else 0
         m["cpc"] = round(m["spend"] / m["link_clicks"], 4) if m["link_clicks"] else None
         m["ctr"] = round(m["link_clicks"] / m["impressions"] * 100, 4) if m["impressions"] else None
         m["cpa"] = round(m["spend"] / m["txns"], 4) if m["txns"] else None
-        m["aov"] = round(m["rev"] / m["txns"], 2) if m["txns"] else None
+        m["aov"] = round(m["rev"] / m["txns"], 2) if m["txns"] and m["rev"] is not None else None
         for k in ("spend", "rev"):
-            m[k] = round(m[k], 2)
+            if m[k] is not None:
+                m[k] = round(m[k], 2)
         ids = sorted(rec["ids"], key=lambda i: -rec["ids"][i])
         acct = max(rec["accts"], key=rec["accts"].get)
         iso = rec["first"]
@@ -207,7 +211,7 @@ def normalise(rows: list, created: dict, thumbs: dict = None) -> list:
             "ad_count": len(ids),
             "metrics": m,
             "thumbnail_url": next((thumbs[i] for i in ids if i in thumbs), None),
-            "preview_link": (f"https://adsmanager.facebook.com/adsmanager/manage/ads?act={acct[4:]}"
+            "preview_link": None if not ids or not ids[0] else (f"https://adsmanager.facebook.com/adsmanager/manage/ads?act={acct[4:]}"
                              f"&selected_ad_ids={ids[0]}") if ids else None,
         })
         out.append(parsed)
@@ -215,25 +219,46 @@ def normalise(rows: list, created: dict, thumbs: dict = None) -> list:
     return out
 
 
-def rows_from_csv(paths: list) -> tuple[list, dict]:
+def _adset_date(adset: str):
+    """Ad set names carry a DD/MM/YY launch token: 'Beetroot testing | 31/08/26 | …'."""
+    import re
+    m = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{2})\b", adset or "")
+    if not m:
+        return None
+    d, mo, y = (int(x) for x in m.groups())
+    if not (1 <= mo <= 12 and 1 <= d <= 31):
+        return None
+    return f"20{y:02d}-{mo:02d}-{d:02d}"
+
+
+def rows_from_csv(paths: list, account: str = None) -> tuple[list, dict]:
     rows, created = [], {}
     for p in paths:
         with open(p, newline="", encoding="utf-8-sig") as fh:
             for r in csv.DictReader(fh):
                 g = lambda *ks: next((r[k] for k in ks if k in r and r[k] not in (None, "")), None)
-                spend = g("Amount spent (USD)", "Amount spent", "Amount Spent")
                 ad_id = g("Ad ID", "Ad Id") or ""
+                link = g("Link clicks", "Link Clicks")
+                purchases = g("Purchases", "Website purchases")
+                if purchases is None and g("CVR Purchases") is not None:
+                    # Custom metric = purchases / link clicks; the product is an
+                    # exact integer in every export checked, so recover the count.
+                    purchases = round(_f(g("CVR Purchases")) * _f(link))
+                value = g("Purchases conversion value", "Website purchases conversion value")
+                adset = g("Ad set name", "Ad Set Name") or ""
                 rows.append({
                     "ad_name": g("Ad name", "Ad Name"), "ad_id": ad_id,
                     "campaign_name": g("Campaign name", "Campaign Name"),
-                    "account_id": (g("Account ID") or "").replace("act_", ""),
-                    "spend": spend, "impressions": g("Impressions"),
+                    "account_id": (g("Account ID") or account or "").replace("act_", ""),
+                    "spend": g("Amount spent (USD)", "Amount spent", "Amount Spent"),
+                    "impressions": g("Impressions"),
                     "clicks": g("Clicks (all)", "Clicks"),
-                    "inline_link_clicks": g("Link clicks", "Link Clicks"),
-                    "actions": [{"action_type": PURCHASE_ACTION, "value": g("Purchases", "Website purchases") or 0}],
-                    "action_values": [{"action_type": PURCHASE_ACTION,
-                                       "value": g("Purchases conversion value", "Website purchases conversion value") or 0}],
-                    "created": (g("Ad creation date", "Reporting starts") or "")[:10] or None,
+                    "inline_link_clicks": link,
+                    "actions": [{"action_type": PURCHASE_ACTION, "value": purchases or 0}],
+                    "action_values": ([{"action_type": PURCHASE_ACTION, "value": value}]
+                                      if value is not None else None),
+                    "created": (g("Ad creation date") or _adset_date(adset)
+                                or (g("Reporting starts") or "")[:10] or None),
                 })
     return rows, created
 
@@ -242,6 +267,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--from-csv", nargs="+")
     ap.add_argument("--days", type=int, default=LOOKBACK_DAYS)
+    ap.add_argument("--account", help="ad account id for CSV exports that lack an Account ID column")
+    ap.add_argument("--label", help="source label shown in the header, e.g. which accounts the export covers")
     args = ap.parse_args()
 
     now = datetime.now(timezone.utc)
@@ -249,7 +276,8 @@ def main():
     since = (now - timedelta(days=args.days)).date().isoformat()
 
     if args.from_csv:
-        rows, created = rows_from_csv(args.from_csv)
+        rows, created = rows_from_csv(args.from_csv, args.account)
+        starts = sorted(r["created"] for r in rows if r.get("created"))
         thumbs, source = {}, "ads-manager-csv"
     else:
         if not os.environ.get("META_ACCESS_TOKEN"):
@@ -273,6 +301,13 @@ def main():
                 by_id[i]["thumbnail_url"] = url
 
     spend = sum(a["metrics"]["spend"] for a in ads)
+    has_rev = any(a["metrics"]["rev"] is not None for a in ads)
+    if args.from_csv:
+        import csv as _c
+        with open(args.from_csv[0], encoding="utf-8-sig") as fh:
+            first = next(_c.DictReader(fh), {})
+        since = first.get("Reporting starts", since)[:10]
+        until = first.get("Reporting ends", until)[:10]
     manifest = {
         "generated_at": now.isoformat(),
         "period": {"start": since, "end": until},
@@ -284,6 +319,8 @@ def main():
         },
         "ad_accounts": AD_ACCOUNTS,
         "ad_count": len(ads),
+        "has_revenue": has_rev,
+        "source_label": args.label,
         "total_spend": round(spend, 2),
         "ads": ads,
     }

@@ -63,6 +63,7 @@ ANGLES = {
     "joint": "Joint", "heart": "Heart Health", "hearthealth": "Heart Health",
     "sale": "Sale", "flashsale": "Sale", "glutabenefits": "Glutathione Benefits",
     "symptomstack": "Symptom Stack",
+    "neuropathy": "Neuropathy", "liverhealth": "Liver Health",
 }
 
 AWARENESS = {"SA", "UA", "PDA", "PA", "PR", "UN", "MA", "TP1", "TP2", "TP3", "NN"}
@@ -79,7 +80,8 @@ FORMATS = {
     "broll": "B-Roll", "b-roll": "B-Roll", "voiceoverbroll": "B-Roll",
     "hook/lead": "Hook/Lead", "tiktokstyle": "TikTok Style",
     "doctor": "Doctor", "warehouse": "Warehouse", "organic": "Organic",
-    "faceless": "Faceless",
+    "faceless": "Faceless", "claymation": "Claymation",
+    "a.i-ugc": "AI UGC", "ai-ugc": "AI UGC", "aiugc": "AI UGC",
 }
 
 # Product: explicit prefixes first, then words anywhere in ad/campaign name.
@@ -222,6 +224,9 @@ def parse_ad_name(name: str, campaign: Optional[str] = None,
             continue
         if out["format"] is None and k in FORMATS:
             out["format"] = FORMATS[k]
+            continue
+        if out["format"] is None and k.startswith("ugc") and len(k) > 3:
+            out["format"] = "UGC"   # UGCLeslie, UGCEric — creator glued on
             continue
 
     # Multi-token angles split by underscores ("Dad_Bod_/_Fatty_liver").
