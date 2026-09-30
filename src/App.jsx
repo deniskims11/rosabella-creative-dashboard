@@ -354,6 +354,9 @@ export default function Dashboard() {
 
   // Win Rate state
   const [wrFormat, setWrFormat] = useState("blended");
+  const [wrAgency, setWrAgency] = useState("__all");
+  // Ad account filter. "__all" = blended Rosabella across every account.
+  const [account, setAccount] = useState("__all");
   const [wrThreshold, setWrThreshold] = useState("$1K");
 
   // Breakdowns state
@@ -410,6 +413,7 @@ export default function Dashboard() {
   // Apply mappings + creation-date filter to ads.
   const ads = useMemo(() => {
     let raw = manifest?.ads ?? [];
+    if (account !== "__all") raw = raw.filter(a => a.account === account);
     if (dateStart || dateEnd) {
       raw = raw.filter(a => {
         if (!a.date || !/^\d{6}$/.test(a.date)) return false;
@@ -426,11 +430,23 @@ export default function Dashboard() {
       }
       return copy;
     });
-  }, [manifest, mappings, dateStart, dateEnd]);
+  }, [manifest, mappings, dateStart, dateEnd, account]);
+
+  // Accounts present in the data, biggest spender first, for the selector.
+  const accountOptions = useMemo(() => {
+    const m = new Map();
+    for (const a of manifest?.ads ?? []) {
+      const k = a.account || "(unknown account)";
+      const v = m.get(k) || { spend: 0, n: 0 };
+      v.spend += a.metrics?.spend || 0; v.n += 1; m.set(k, v);
+    }
+    return [...m.entries()].map(([name, v]) => ({ name, ...v })).sort((x, y) => y.spend - x.spend);
+  }, [manifest]);
 
   const totals = useMemo(() => aggregate(ads), [ads]);
   const monthlyData = useMemo(() => monthly(ads), [ads]);
-  const wrData = useMemo(() => winRate(ads, wrFormat), [ads, wrFormat]);
+  const wrAgencies = useMemo(() => dimensionValues(ads, "agency").filter(v => v.value !== "(untagged)"), [ads]);
+  const wrData = useMemo(() => winRate(wrAgency === "__all" ? ads : ads.filter(a => (a.agency ?? "(untagged)") === wrAgency), wrFormat), [ads, wrFormat, wrAgency]);
   const concepts = useMemo(() => toBreakdownRows(groupBy(ads, "concept")), [ads]);
   const angles = useMemo(() => toBreakdownRows(groupBy(ads, "angle")), [ads]);
   const agencies = useMemo(() => toBreakdownRows(groupBy(ads, "agency")), [ads]);
@@ -438,6 +454,7 @@ export default function Dashboard() {
   const products = useMemo(() => toBreakdownRows(groupBy(ads, "product")), [ads]);
   const awareness = useMemo(() => toBreakdownRows(groupBy(ads, "awareness")), [ads]);
   const accounts = useMemo(() => toBreakdownRows(groupBy(ads, "account")), [ads]);
+  const medias = useMemo(() => toBreakdownRows(groupBy(ads, "media")), [ads]);
   const formats = useMemo(() => toBreakdownRows(groupBy(ads, "format")), [ads]);
 
   // Creator × Concept with filter
@@ -622,7 +639,7 @@ export default function Dashboard() {
   if (!manifest) return <div style={{ padding: 24, fontFamily: "sans-serif", color: "#8a6f68" }}>Loading Meta data…</div>;
 
   const ALL_DIMS_LABELS = {
-    angle: "Angle", format: "Format", concept: "Concept", product: "Product",
+    media: "Video vs Static", angle: "Angle", format: "Format", concept: "Concept", product: "Product",
     awareness: "Awareness", agency: "Agency", creator: "Creator",
     creative_id: "Creative ID", version: "Version", build: "New / Var",
     offer: "Offer", funnel: "Funnel", buying_type: "Buying Type", geo: "Geo",
@@ -651,6 +668,16 @@ export default function Dashboard() {
             {manifest.period.start.slice(0, 10)} → {manifest.period.end.slice(0, 10)} · {ads.length.toLocaleString()} creatives · Attribution: {manifest.attribution?.primary ?? '—'}
             {manifest.source_label && <> · Source: {manifest.source_label}</>}
           </p>
+          {accountOptions.length > 1 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px" }}>
+              <span style={{ fontSize: 11, color: "#8a6f68", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.3 }}>Ad account</span>
+              <select value={account} onChange={e => setAccount(e.target.value)}
+                style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #D8C8BC", fontSize: 13, fontWeight: 600, color: "#50000B", background: "#fff" }}>
+                <option value="__all">All Rosabella (blended) · {fmt(accountOptions.reduce((t, o) => t + o.spend, 0))}</option>
+                {accountOptions.map(o => <option key={o.name} value={o.name}>{o.name} · {fmt(o.spend)}</option>)}
+              </select>
+            </div>
+          )}
           <p style={{ color: "#a89089", fontSize: 11, margin: 0 }}>
             Last refreshed: {new Date(manifest.generated_at).toLocaleString()} · {Object.keys(mappings).length} dims mapped
           </p>
@@ -741,18 +768,23 @@ export default function Dashboard() {
                   <button key={f} onClick={() => setWrFormat(f)} style={{
                     padding: "6px 14px", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12, fontWeight: 600,
                     background: wrFormat === f ? "#fff" : "transparent", color: wrFormat === f ? "#50000B" : "#8a6f68",
-                  }}>{f === "blended" ? "All" : f === "video" ? "Video" : "Image"}</button>
+                  }}>{f === "blended" ? "All" : f === "video" ? "Video" : "Static"}</button>
                 ))}
               </div>
               <select value={wrThreshold} onChange={e => setWrThreshold(e.target.value)}
                 style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #D8C8BC", fontSize: 12, fontWeight: 600, color: "#3a2429" }}>
                 {THRESHOLDS.map(t => <option key={t} value={t}>Threshold: {t}</option>)}
               </select>
+              <select value={wrAgency} onChange={e => setWrAgency(e.target.value)}
+                style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #D8C8BC", fontSize: 12, fontWeight: 600, color: "#3a2429" }}>
+                <option value="__all">Agency: All</option>
+                {wrAgencies.map(v => <option key={v.value} value={v.value}>Agency: {v.value} ({v.n})</option>)}
+              </select>
             </div>
 
             <div style={{ background: "#fff", borderRadius: 10, padding: 20, border: "1px solid #E8DCD0", marginBottom: 16 }}>
               <h3 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 12px", color: "#3a2429" }}>
-                Win Rate Trend — {wrThreshold} ({wrFormat === "blended" ? "All" : wrFormat === "video" ? "Video Only" : "Image Only"})
+                Win Rate Trend — {wrThreshold} ({wrFormat === "blended" ? "All" : wrFormat === "video" ? "Video Only" : "Static Only"}){wrAgency !== "__all" && ` · Agency ${wrAgency}`}
               </h3>
               <ResponsiveContainer width="100%" height={240}>
                 <ComposedChart data={wrData.filter(d => d.month !== "TOTAL")}>
@@ -806,7 +838,7 @@ export default function Dashboard() {
         {tab === "Breakdowns" && (
           <div>
             <div style={{ display: "flex", gap: 3, background: "#E8DCD0", borderRadius: 6, padding: 2, marginBottom: 16, width: "fit-content" }}>
-              {["Format", "Product", "Awareness", "Ad Account", "Angle × Concept"].map(v => (
+              {["Video vs Static", "Format", "Product", "Awareness", "Ad Account", "Angle × Concept"].map(v => (
                 <button key={v} onClick={() => setBdView(v)} style={{
                   padding: "6px 14px", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 12, fontWeight: 600,
                   background: bdView === v ? "#fff" : "transparent", color: bdView === v ? "#50000B" : "#8a6f68",
@@ -818,6 +850,13 @@ export default function Dashboard() {
               <div style={{ background: "#fff", borderRadius: 10, padding: 16, border: "1px solid #E8DCD0", overflowX: "auto" }}>
                 <h3 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 12px", color: "#3a2429" }}>Performance by Format ({formats.length} formats)</h3>
                 <BreakdownTable rows={formats} nameLabel="Format" onRowClick={r => openModal(`Format: ${r.name}`, `${r.creatives} creatives · Spend ${fmt(r.spend)}`, r.ads)} />
+              </div>
+            )}
+
+            {bdView === "Video vs Static" && (
+              <div style={{ background: "#fff", borderRadius: 10, padding: 16, border: "1px solid #E8DCD0", overflowX: "auto" }}>
+                <h3 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 12px", color: "#3a2429" }}>Video vs Static · <span style={{ fontWeight: 400, color: "#b0978f" }}>drill further in the Analysis tab (e.g. Video vs Static → Format → Angle)</span></h3>
+                <BreakdownTable rows={medias} nameLabel="Media" onRowClick={r => openModal(`Media: ${r.name}`, `${r.creatives} creatives · Spend ${fmt(r.spend)}`, r.ads)} />
               </div>
             )}
 

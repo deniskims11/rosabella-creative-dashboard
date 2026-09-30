@@ -21,8 +21,17 @@ const hasSpend = (a) => (a.metrics.spend || 0) > 0;
 
 // Parser format labels (scripts/parse_ad_name.py FORMATS) split by medium.
 const VIDEO_FORMATS = ["Video", "VSL", "UGC", "AI Avatar", "AI Characters", "AI Authority",
-  "Movie", "Song Ad", "B-Roll", "Hook/Lead", "TikTok Style", "Doctor", "Warehouse", "Organic", "Faceless", "Claymation", "AI UGC"];
+  "Movie", "Song Ad", "B-Roll", "Hook/Lead", "TikTok Style", "Doctor", "Warehouse", "Organic", "Faceless", "Claymation", "AI UGC", "3D Animation", "Unboxing"];
 const IMAGE_FORMATS = ["Static", "Long-Form Static"];
+
+// Video vs Static. The parser writes `media` (it also reads name hints like
+// "StaticImage" or "15s"); fall back to the format lists for older manifests.
+export function mediaOf(ad) {
+  if (ad.media) return ad.media;
+  if (VIDEO_FORMATS.includes(ad.format)) return "Video";
+  if (IMAGE_FORMATS.includes(ad.format)) return "Static";
+  return null;
+}
 
 // Translate YYMMDD launch dates into YYYY-MM buckets.
 function yymmddToMonth(s) {
@@ -91,8 +100,9 @@ export function monthly(ads) {
     if (!buckets.has(m)) buckets.set(m, { month: m, video: 0, image: 0, ads: [] });
     const b = buckets.get(m);
     b.ads.push(ad);
-    if (VIDEO_FORMATS.includes(ad.format)) b.video += 1;
-    else if (IMAGE_FORMATS.includes(ad.format)) b.image += 1;
+    const media = mediaOf(ad);
+    if (media === "Video") b.video += 1;
+    else if (media === "Static") b.image += 1;
   }
   return Array.from(buckets.values())
     .map((b) => {
@@ -118,11 +128,9 @@ export function monthly(ads) {
 export function winRate(ads, formatFilter = "blended") {
   let filtered = ads.filter(hasSpend);
   if (formatFilter === "video") {
-    filtered = filtered.filter((a) =>
-      VIDEO_FORMATS.includes(a.format));
+    filtered = filtered.filter((a) => mediaOf(a) === "Video");
   } else if (formatFilter === "image") {
-    filtered = filtered.filter((a) =>
-      IMAGE_FORMATS.includes(a.format));
+    filtered = filtered.filter((a) => mediaOf(a) === "Static");
   }
 
   const byMonth = new Map();
@@ -192,7 +200,7 @@ export function toBreakdownRows(groups) {
 
 // Dimensions available for pivoting and for the Data Clean Up tab.
 export const DIMENSIONS = [
-  "angle", "product", "format", "awareness", "concept", "agency", "creator",
+  "media", "angle", "product", "format", "awareness", "concept", "agency", "creator",
   "creative_id", "version", "build", "offer", "funnel", "buying_type", "geo",
   "account", "convention",
 ];
