@@ -32,7 +32,7 @@ from typing import Optional
 
 _SCHEMA_KEYS = (
     "ad_name", "convention", "creative_id", "agency", "angle", "awareness",
-    "format", "product", "concept", "creator", "version", "build",
+    "format", "media", "product", "concept", "creator", "version", "build",
     "copy_no", "geo", "buying_type", "funnel", "offer", "launch_date",
     "date", "dedup_key",
 )
@@ -84,6 +84,9 @@ FORMATS = {
     "hook/lead": "Hook/Lead", "tiktokstyle": "TikTok Style",
     "doctor": "Doctor", "warehouse": "Warehouse", "organic": "Organic",
     "faceless": "Faceless", "claymation": "Claymation",
+    "hooklead": "Hook/Lead", "3danimation": "3D Animation", "animation": "3D Animation",
+    "unboxing": "Unboxing", "skeleton": "3D Animation", "ph": "Static", "photo": "Static",
+    "staticimage": "Static",
     "a.i-ugc": "AI UGC", "ai-ugc": "AI UGC", "aiugc": "AI UGC",
 }
 
@@ -101,6 +104,28 @@ PRODUCT_WORDS = [
 ]
 
 BUILD = {"NEW", "VAR", "N"}
+
+# Media type, derived from format. Kept in sync with src/aggregator.js.
+STATIC_FORMATS = {"Static", "Long-Form Static"}
+VIDEO_FORMATS = {"Video", "VSL", "UGC", "AI Avatar", "AI Characters", "AI Authority",
+                 "Movie", "Song Ad", "B-Roll", "Hook/Lead", "TikTok Style", "Doctor",
+                 "Warehouse", "Organic", "Faceless", "Claymation", "AI UGC",
+                 "3D Animation", "Unboxing"}
+
+
+def media_type(fmt, name: str) -> Optional[str]:
+    """'Video' or 'Static'. Uses the parsed format first, then name hints
+    ('StaticImage', '15s', 'VSL') for ads whose format token is unknown."""
+    if fmt in STATIC_FORMATS:
+        return "Static"
+    if fmt in VIDEO_FORMATS:
+        return "Video"
+    low = (name or "").lower()
+    if re.search(r"static|image|\bimg\b|lfs", low):
+        return "Static"
+    if re.search(r"video|vsl|ugc|movie|broll|b-roll|\d{1,3}s\b|reel", low):
+        return "Video"
+    return None
 CREATIVE_ID = re.compile(r"^([A-Z]{2,5})(\d{2,4})([A-Za-z0-9.\-]*)$")
 VERSION = re.compile(r"^V(\d{1,2})$", re.I)
 NOT_AGENCY = {"TP", "V", "W", "NN"}
@@ -161,6 +186,13 @@ def _hook_text(tokens: list) -> Optional[str]:
 
 def parse_ad_name(name: str, campaign: Optional[str] = None,
                   adset: Optional[str] = None) -> dict:
+    out = _parse(name, campaign, adset)
+    out["media"] = media_type(out.get("format"), name)
+    return out
+
+
+def _parse(name: str, campaign: Optional[str] = None,
+           adset: Optional[str] = None) -> dict:
     out = _blank()
     raw = (name or "").strip()
     out["ad_name"] = raw
@@ -290,12 +322,12 @@ def parse_ad_name(name: str, campaign: Optional[str] = None,
 # --- Coverage / self-test ---------------------------------------------------
 FIXTURES = [
     ("BR_HighCholesterol_PDA_LongFormStaticScript_No_NO_PR_NEW_PRME609_V1_I_FILL_340_STATIN_PRESCRIPTIONS_A_WEEK.1",
-     {"creative_id": "PRME609", "agency": "PR", "angle": "High Cholesterol", "awareness": "PDA",
+     {"creative_id": "PRME609", "agency": "PR", "angle": "High Cholesterol", "awareness": "PDA", "media": "Static",
       "format": "Long-Form Static", "product": "Beetroot", "version": "V1", "build": "NEW",
       "concept": "I FILL 340 STATIN PRESCRIPTIONS A WEEK"}),
     ("MX146_NEW_NONE_V1_HighCholesterol_NN_MOVIE_Rosabella_MORNING,_MA'AM._I'VE_GOT_ANOTHER_ONE_FOR_YOU._2",
      {"creative_id": "MX146", "agency": "MX", "angle": "High Cholesterol", "format": "Movie",
-      "convention": "id_first", "concept": "MORNING, MA'AM. I'VE GOT ANOTHER ONE FOR YOU"}),
+      "convention": "id_first", "concept": "MORNING, MA'AM. I'VE GOT ANOTHER ONE FOR YOU", "media": "Video"}),
     ("CA683_VAR_NONE_V4_HighCholesterol_TP3_AICharacters_RB_Hey_Hey_Get_Your_Hands_Off_Him",
      {"creative_id": "CA683", "agency": "CA", "build": "VAR", "version": "V4", "awareness": "TP3",
       "format": "AI Characters", "concept": "HEY HEY GET YOUR HANDS OFF HIM"}),

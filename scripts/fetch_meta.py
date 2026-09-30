@@ -36,8 +36,8 @@ GRAPH = "https://graph.facebook.com/v22.0"
 # Ambrosia Brands business portfolio — all three accounts run Rosabella.
 # "FS | EUR | #1" is the main account (~$7M/month); the other two are small.
 AD_ACCOUNTS = {
-    "act_1609555939791435": "FS | EUR | #1",
-    "act_1709314040273728": "Rosabella - Shopify",
+    "act_1609555939791435": "FS | EUR | #1 (Main)",
+    "act_1709314040273728": "Rosabella - Shopify (Moringa)",
     "act_901180242723879": "Rosabella | New products",
 }
 
@@ -166,9 +166,12 @@ def normalise(rows: list, created: dict, thumbs: dict = None) -> list:
             "rev": None if r.get("action_values") is None else _action(r.get("action_values")),
             "txns": _action(r.get("actions")),
         }
-        rec = by.get(name)
+        # Key by account too: the dashboard filters by ad account, so the same
+        # creative name running in two accounts must stay two records.
+        key = (str(r.get("account_id") or ""), name)
+        rec = by.get(key)
         if rec is None:
-            rec = by[name] = {"m": {k: (None if v is None else 0.0) for k, v in m.items()}, "ids": {}, "camps": {},
+            rec = by[key] = {"m": {k: (None if v is None else 0.0) for k, v in m.items()}, "ids": {}, "camps": {},
                               "accts": {}, "first": None}
         for k, v in m.items():
             if v is None or rec["m"][k] is None:
@@ -186,7 +189,7 @@ def normalise(rows: list, created: dict, thumbs: dict = None) -> list:
             rec["first"] = d
 
     out = []
-    for name, rec in by.items():
+    for (_acct_key, name), rec in by.items():
         camps = sorted(rec["camps"], key=lambda c: -rec["camps"][c])
         parsed = parse_ad_name(name, camps[0] if camps else None)
         m = rec["m"]
@@ -273,13 +276,24 @@ def main():
     ap.add_argument("--days", type=int, default=LOOKBACK_DAYS)
     ap.add_argument("--account", help="ad account id for CSV exports that lack an Account ID column")
     ap.add_argument("--label", help="source label shown in the header, e.g. which accounts the export covers")
+    ap.add_argument("--csv-account", action="append", default=[], metavar="ACT_ID=FILE",
+                    help="one Ads Manager export per flag, tagged with its ad account id; repeatable")
     args = ap.parse_args()
 
     now = datetime.now(timezone.utc)
     until = (now - timedelta(days=1)).date().isoformat()
     since = (now - timedelta(days=args.days)).date().isoformat()
 
-    if args.from_csv:
+    if args.csv_account:
+        rows, created = [], {}
+        args.from_csv = []
+        for spec in args.csv_account:
+            act, path = spec.split("=", 1)
+            r, _ = rows_from_csv([path], act)
+            rows += r
+            args.from_csv.append(path)
+        thumbs, source = {}, "ads-manager-csv"
+    elif args.from_csv:
         rows, created = rows_from_csv(args.from_csv, args.account)
         starts = sorted(r["created"] for r in rows if r.get("created"))
         thumbs, source = {}, "ads-manager-csv"
