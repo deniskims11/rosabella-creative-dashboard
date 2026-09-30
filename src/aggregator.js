@@ -21,7 +21,7 @@ const hasSpend = (a) => (a.metrics.spend || 0) > 0;
 
 // Parser format labels (scripts/parse_ad_name.py FORMATS) split by medium.
 const VIDEO_FORMATS = ["Video", "VSL", "UGC", "AI Avatar", "AI Characters", "AI Authority",
-  "Movie", "Song Ad", "B-Roll", "Hook/Lead", "TikTok Style", "Doctor", "Warehouse", "Organic", "Faceless"];
+  "Movie", "Song Ad", "B-Roll", "Hook/Lead", "TikTok Style", "Doctor", "Warehouse", "Organic", "Faceless", "Claymation", "AI UGC"];
 const IMAGE_FORMATS = ["Static", "Long-Form Static"];
 
 // Translate YYMMDD launch dates into YYYY-MM buckets.
@@ -50,15 +50,19 @@ export function aggregate(ads) {
     { spend: 0, rev: 0, txns: 0, impressions: 0, clicks: 0, link_clicks: 0,
       pixel_rev: 0, pixel_txns: 0, nc_txns: 0, count: 0 }
   );
+  // CSV exports without a purchase-value column ship rev: null. Keep that as
+  // "unknown" rather than letting it read as $0 revenue / 0.00x ROAS.
+  const hasRev = ads.some((r) => r.metrics && r.metrics.rev != null);
+  if (!hasRev) tot.rev = null;
   return {
     ...tot,
-    roas: tot.spend ? tot.rev / tot.spend : 0,
+    roas: hasRev ? (tot.spend ? tot.rev / tot.spend : 0) : null,
     pixel_roas: tot.spend ? tot.pixel_rev / tot.spend : 0,
     cpm: tot.impressions ? (tot.spend / tot.impressions) * 1000 : 0,
     cpc: tot.link_clicks ? tot.spend / tot.link_clicks : null,
     ctr: tot.impressions ? (tot.link_clicks / tot.impressions) * 100 : null,
     cpa: tot.txns ? tot.spend / tot.txns : null,
-    aov: tot.txns ? tot.rev / tot.txns : null,
+    aov: hasRev && tot.txns ? tot.rev / tot.txns : null,
     // Share of pixel-attributed purchases that came from new customers.
     pct_new: tot.pixel_txns ? (tot.nc_txns / tot.pixel_txns) * 100 : null,
   };

@@ -17,6 +17,7 @@ const TABS = ["Overview", "Win Rate", "Angles", "Concepts", "Agencies", "Creator
 const THRESHOLDS = ["$1K", "$5K", "$15K", "$25K", "$50K", "$100K", "$150K+"];
 
 const RoasBadge = ({ roas }) => {
+  if (roas == null) return <span style={{ color: "#b0978f" }}>—</span>;
   const r = roas ?? 0;
   const bg = r >= 1.2 ? "#dcfce7" : r >= 1.0 ? "#f0fdf4" : r >= 0.8 ? "#fef9c3" : "#fee2e2";
   const color = r >= 1.2 ? "#166534" : r >= 1.0 ? "#15803d" : r >= 0.8 ? "#854d0e" : "#991b1b";
@@ -648,6 +649,7 @@ export default function Dashboard() {
           </h1>
           <p style={{ color: "#8a6f68", fontSize: 12, margin: "6px 0 4px", letterSpacing: 0.2 }}>
             {manifest.period.start.slice(0, 10)} → {manifest.period.end.slice(0, 10)} · {ads.length.toLocaleString()} creatives · Attribution: {manifest.attribution?.primary ?? '—'}
+            {manifest.source_label && <> · Source: {manifest.source_label}</>}
           </p>
           <p style={{ color: "#a89089", fontSize: 11, margin: 0 }}>
             Last refreshed: {new Date(manifest.generated_at).toLocaleString()} · {Object.keys(mappings).length} dims mapped
@@ -680,9 +682,13 @@ export default function Dashboard() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
               {[
                 { label: "Total Spend", value: fmt(totals.spend), sub: "Meta-reported" },
-                { label: "Total Revenue", value: fmt(totals.rev), sub: "Meta-reported purchases value" },
-                { label: "Blended ROAS", value: `${totals.roas.toFixed(2)}x`, sub: "rev / spend" },
-                { label: "CPA", value: totals.cpa ? `$${totals.cpa.toFixed(2)}` : "—", sub: `CPM $${totals.cpm.toFixed(2)}` },
+                { label: "Total Revenue", value: fmt(totals.rev), sub: totals.rev == null ? "Not in this export" : "Meta-reported purchases value" },
+                totals.roas == null
+                  ? { label: "Blended CPA", value: totals.cpa ? `$${totals.cpa.toFixed(2)}` : "—", sub: "spend / purchases" }
+                  : { label: "Blended ROAS", value: `${totals.roas.toFixed(2)}x`, sub: "rev / spend" },
+                totals.roas == null
+                  ? { label: "CPM", value: `$${totals.cpm.toFixed(2)}`, sub: `Link CTR ${fmtPct(totals.ctr)}` }
+                  : { label: "CPA", value: totals.cpa ? `$${totals.cpa.toFixed(2)}` : "—", sub: `CPM $${totals.cpm.toFixed(2)}` },
                 { label: "Total Purchases", value: fmtNum(totals.txns), sub: `${ads.length.toLocaleString()} creatives` },
               ].map((kpi, i) => (
                 <div key={i} style={{ background: "#fff", borderRadius: 10, padding: "16px 14px", border: "1px solid #E8DCD0" }}>
@@ -701,7 +707,7 @@ export default function Dashboard() {
                   <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#b0978f" }} />
                   <YAxis yAxisId="left" tick={{ fontSize: 11, fill: "#b0978f" }} tickFormatter={v => fmt(v)} />
                   <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: "#b0978f" }} domain={[0, 1.5]} tickFormatter={v => `${v}x`} />
-                  <Tooltip formatter={(v, n) => n === "ROAS" ? `${v.toFixed(2)}x` : fmtFull(v)} />
+                  <Tooltip formatter={(v, n) => v == null ? "—" : n === "ROAS" ? `${v.toFixed(2)}x` : fmtFull(v)} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Bar yAxisId="left" dataKey="spend" fill="#93c5fd" name="Spend" radius={[3, 3, 0, 0]} />
                   <Bar yAxisId="left" dataKey="revenue" fill="#86efac" name="Revenue" radius={[3, 3, 0, 0]} />
