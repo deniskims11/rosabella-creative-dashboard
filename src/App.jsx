@@ -393,7 +393,18 @@ export default function Dashboard() {
         if (!r.ok) throw new Error(`${r.status}: ${r.statusText}`);
         return r.json();
       })
-      .then(setManifest)
+      .then(async m => {
+        // Per-period ad files (see scripts/fetch_meta.py); concatenated here.
+        if (m.ad_files?.length) {
+          const parts = await Promise.all(m.ad_files.map(f =>
+            fetch(`${import.meta.env.BASE_URL}data/${f}`).then(r => {
+              if (!r.ok) throw new Error(`${f}: ${r.status}`);
+              return r.json();
+            })));
+          m = { ...m, ads: parts.flat() };
+        }
+        setManifest(m);
+      })
       .catch(e => setError(String(e)));
     // Mappings are owned by GitHub (data/mappings.json) — fetch fresh every
     // load. The cache-buster prevents raw.githubusercontent.com's ~5 min CDN
