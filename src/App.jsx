@@ -4,7 +4,7 @@ import {
   ResponsiveContainer, Cell, ComposedChart,
 } from "recharts";
 import {
-  aggregate, groupBy, monthly, winRate, toBreakdownRows,
+  aggregate, groupBy, monthly, winRate, toBreakdownRows, mergePeriods,
   DIMENSIONS, dimensionValues,
 } from "./aggregator.js";
 
@@ -357,6 +357,7 @@ export default function Dashboard() {
   const [wrAgency, setWrAgency] = useState("__all");
   // Ad account filter. "__all" = blended Rosabella across every account.
   const [account, setAccount] = useState("__all");
+  const [periodView, setPeriodView] = useState("all");
   const [wrThreshold, setWrThreshold] = useState("$1K");
 
   // Breakdowns state
@@ -403,16 +404,31 @@ export default function Dashboard() {
       .catch(() => setMappings({}));
   }, []);
 
+  // Period views. Each manifest period is a non-overlapping window; a view is
+  // a set of windows that the merge folds into one record per creative.
+  const periodViews = useMemo(() => {
+    const ps = manifest?.periods ?? [];
+    const fmtD = (d) => new Date(d + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+    return (manifest?.views ?? []).map(v => {
+      const sel = ps.filter(p => v.keys.includes(p.key));
+      const start = sel.map(p => p.start).sort()[0];
+      const end = sel.map(p => p.end).sort().slice(-1)[0];
+      return { ...v, start, end, label: `${v.label} · ${fmtD(start)} – ${fmtD(end)}` };
+    });
+  }, [manifest]);
+  const activeView = periodViews.find(v => v.id === periodView) || periodViews[0];
+  const periodAds = useMemo(() => mergePeriods(manifest?.ads ?? [], activeView ? activeView.keys : null), [manifest, activeView]);
+
   // Bounds of ad creation dates in the raw data (YYMMDD strings).
   const dateBounds = useMemo(() => {
-    const dates = (manifest?.ads ?? []).map(a => a.date).filter(d => d && /^\d{6}$/.test(d));
+    const dates = periodAds.map(a => a.date).filter(d => d && /^\d{6}$/.test(d));
     if (!dates.length) return null;
     return { min: dates.reduce((a, b) => a < b ? a : b), max: dates.reduce((a, b) => a > b ? a : b) };
-  }, [manifest]);
+  }, [periodAds]);
 
   // Apply mappings + creation-date filter to ads.
   const ads = useMemo(() => {
-    let raw = manifest?.ads ?? [];
+    let raw = periodAds;
     if (account !== "__all") raw = raw.filter(a => a.account === account);
     if (dateStart || dateEnd) {
       raw = raw.filter(a => {
@@ -430,12 +446,12 @@ export default function Dashboard() {
       }
       return copy;
     });
-  }, [manifest, mappings, dateStart, dateEnd, account]);
+  }, [periodAds, mappings, dateStart, dateEnd, account]);
 
   // Accounts present in the data, biggest spender first, for the selector.
   const accountOptions = useMemo(() => {
     const m = new Map();
-    for (const a of manifest?.ads ?? []) {
+    for (const a of periodAds) {
       const k = a.account || "(unknown account)";
       const v = m.get(k) || { spend: 0, n: 0 };
       v.spend += a.metrics?.spend || 0; v.n += 1; m.set(k, v);
@@ -665,11 +681,18 @@ export default function Dashboard() {
             Rosabella Meta Creative Performance
           </h1>
           <p style={{ color: "#8a6f68", fontSize: 12, margin: "6px 0 4px", letterSpacing: 0.2 }}>
-            {manifest.period.start.slice(0, 10)} → {manifest.period.end.slice(0, 10)} · {ads.length.toLocaleString()} creatives · Attribution: {manifest.attribution?.primary ?? '—'}
+            {(activeView?.start ?? manifest.period.start).slice(0, 10)} → {(activeView?.end ?? manifest.period.end).slice(0, 10)} · {ads.length.toLocaleString()} creatives · Attribution: {manifest.attribution?.primary ?? '—'}
             {manifest.source_label && <> · Source: {manifest.source_label}</>}
           </p>
-          {accountOptions.length > 1 && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px" }}>
+          {(accountOptions.length > 1 || periodViews.length > 1) && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px", flexWrap: "wrap" }}>
+              {periodViews.length > 1 && <>
+                <span style={{ fontSize: 11, color: "#8a6f68", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.3 }}>Period</span>
+                <select value={activeView?.id} onChange={e => setPeriodView(e.target.value)}
+                  style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #D8C8BC", fontSize: 13, fontWeight: 600, color: "#50000B", background: "#fff", marginRight: 12 }}>
+                  {periodViews.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                </select>
+              </>}
               <span style={{ fontSize: 11, color: "#8a6f68", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.3 }}>Ad account</span>
               <select value={account} onChange={e => setAccount(e.target.value)}
                 style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #D8C8BC", fontSize: 13, fontWeight: 600, color: "#50000B", background: "#fff" }}>
@@ -1001,7 +1024,7 @@ export default function Dashboard() {
           dim={categoryInspector.dim}
           target={categoryInspector.target}
           mappings={mappings}
-          values={dimensionValues(manifest?.ads ?? [], categoryInspector.dim)}
+          values={dimensionValues(periodAds, categoryInspector.dim)}
           onRemove={(raw) => setMapping(categoryInspector.dim, raw, "")}
           onClose={() => setCategoryInspector(null)}
         />

@@ -24,6 +24,44 @@ const VIDEO_FORMATS = ["Video", "VSL", "UGC", "AI Avatar", "AI Characters", "AI 
   "Movie", "Song Ad", "B-Roll", "Hook/Lead", "TikTok Style", "Doctor", "Warehouse", "Organic", "Faceless", "Claymation", "AI UGC", "3D Animation", "Unboxing"];
 const IMAGE_FORMATS = ["Static", "Long-Form Static"];
 
+const ADDITIVE = ["spend", "impressions", "clicks", "link_clicks", "rev", "txns"];
+
+// Derived per-creative ratios, always computed from summed totals.
+export function withRatios(m) {
+  const out = { ...m };
+  out.roas = m.rev != null && m.spend ? m.rev / m.spend : (m.rev != null ? 0 : null);
+  out.cpm = m.impressions ? (m.spend / m.impressions) * 1000 : 0;
+  out.cpc = m.link_clicks ? m.spend / m.link_clicks : null;
+  out.ctr = m.impressions ? ((m.link_clicks || 0) / m.impressions) * 100 : null;
+  out.cpa = m.txns ? m.spend / m.txns : null;
+  out.aov = m.txns && m.rev != null ? m.rev / m.txns : null;
+  return out;
+}
+
+// Keep the records of the selected periods and fold each (account, ad name)
+// into one creative: metrics summed, launch date = earliest seen. A creative
+// running in several windows therefore counts once, with its compounded spend.
+// Manifests without periods pass straight through.
+export function mergePeriods(ads, keys) {
+  const keep = keys ? new Set(keys) : null;
+  const by = new Map();
+  for (const a of ads) {
+    if (keep && a.p && !keep.has(a.p)) continue;
+    const k = `${a.account || ""}\u0001${a.ad_name}`;
+    const prev = by.get(k);
+    if (!prev) {
+      by.set(k, { ...a, metrics: { ...a.metrics } });
+      continue;
+    }
+    for (const f of ADDITIVE) {
+      if (a.metrics[f] == null) continue;
+      prev.metrics[f] = (prev.metrics[f] || 0) + a.metrics[f];
+    }
+    if (a.date && (!prev.date || a.date < prev.date)) { prev.date = a.date; prev.launch_date = a.launch_date; }
+  }
+  return [...by.values()].map((r) => ({ ...r, metrics: withRatios(r.metrics) }));
+}
+
 // Video vs Static. The parser writes `media` (it also reads name hints like
 // "StaticImage" or "15s"); fall back to the format lists for older manifests.
 export function mediaOf(ad) {
