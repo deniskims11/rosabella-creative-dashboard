@@ -276,21 +276,34 @@ def main():
     ap.add_argument("--days", type=int, default=LOOKBACK_DAYS)
     ap.add_argument("--account", help="ad account id for CSV exports that lack an Account ID column")
     ap.add_argument("--label", help="source label shown in the header, e.g. which accounts the export covers")
-    ap.add_argument("--csv-account", action="append", default=[], metavar="ACT_ID=FILE",
-                    help="one Ads Manager export per flag, tagged with its ad account id; repeatable")
+    ap.add_argument("--csv-account", action="append", default=[], metavar="[PERIOD:]ACT_ID=FILE",
+                    help="one Ads Manager export per flag, tagged with its ad account id and "
+                         "optionally a period key (e.g. p0:act_123=file.csv); repeatable")
+    ap.add_argument("--period", action="append", default=[], metavar="KEY=START..END",
+                    help="declare a period window, e.g. p0=2026-08-31..2026-09-28; repeatable")
+    ap.add_argument("--view", action="append", default=[], metavar="ID|LABEL|KEY,KEY",
+                    help="a selectable period view made of non-overlapping windows; first is the default")
     args = ap.parse_args()
 
     now = datetime.now(timezone.utc)
     until = (now - timedelta(days=1)).date().isoformat()
     since = (now - timedelta(days=args.days)).date().isoformat()
 
+    periods = []
+    for spec in args.period:
+        key, rng = spec.split("=", 1)
+        start, end = rng.split("..")
+        periods.append({"key": key, "start": start, "end": end})
+    period_rows = {}
     if args.csv_account:
         rows, created = [], {}
         args.from_csv = []
         for spec in args.csv_account:
-            act, path = spec.split("=", 1)
+            pkey, _, rest = spec.rpartition(":") if ":" in spec.split("=", 1)[0] else ("", "", spec)
+            act, path = rest.split("=", 1)
             r, _ = rows_from_csv([path], act)
             rows += r
+            period_rows.setdefault(pkey, []).extend(r)
             args.from_csv.append(path)
         thumbs, source = {}, "ads-manager-csv"
     elif args.from_csv:
@@ -309,7 +322,16 @@ def main():
             created.update(c)
         thumbs, source = {}, "meta-marketing-api"
 
-    ads = normalise(rows, created)
+    if periods:
+        # One record per (period, account, ad name). The front end merges the
+        # periods the viewer selects, so compounding never double-counts.
+        ads = []
+        for p in periods:
+            for a in normalise(period_rows.get(p["key"], []), created):
+                a["p"] = p["key"]
+                ads.append(a)
+    else:
+        ads = normalise(rows, created)
     if not args.from_csv:
         want = [a["meta_ad_ids"][0] for a in ads if a["metrics"]["spend"] >= THUMB_MIN_SPEND and a["meta_ad_ids"]]
         thumbs = fetch_thumbnails(want)
@@ -320,7 +342,10 @@ def main():
 
     spend = sum(a["metrics"]["spend"] for a in ads)
     has_rev = any(a["metrics"]["rev"] is not None for a in ads)
-    if args.from_csv:
+    if periods:
+        since = min(p["start"] for p in periods)
+        until = max(p["end"] for p in periods)
+    elif args.from_csv:
         import csv as _c
         with open(args.from_csv[0], encoding="utf-8-sig") as fh:
             first = next(_c.DictReader(fh), {})
@@ -337,6 +362,9 @@ def main():
         },
         "ad_accounts": AD_ACCOUNTS,
         "ad_count": len(ads),
+        "periods": periods,
+        "views": [dict(zip(("id", "label", "keys"), (v.split("|")[0], v.split("|")[1], v.split("|")[2].split(","))))
+                  for v in args.view],
         "has_revenue": has_rev,
         "source_label": args.label,
         "total_spend": round(spend, 2),
@@ -349,8 +377,27 @@ def main():
         a.pop("dedup_key", None)
         for k in [k for k, v in a.items() if v is None or v == [] or v == [""]]:
             del a[k]
-        a["metrics"] = {k: v for k, v in a["metrics"].items() if v is not None}
+        # Only additive metrics ship; ratios are recomputed in the browser after
+        # periods are merged (a ratio of sums, never a sum of ratios).
+        a["metrics"] = {k: v for k, v in a["metrics"].items()
+                        if v is not None and k in ("spend", "impressions", "clicks", "link_clicks", "rev", "txns")}
+        for k in ("impressions", "clicks", "link_clicks", "txns"):
+            if k in a["metrics"]:
+                a["metrics"][k] = int(round(a["metrics"][k]))
+        for k in ("meta_ad_ids", "ad_count", "preview_link", "thumbnail_url", "build", "copy_no", "convention"):
+            a.pop(k, None)
     OUT.parent.mkdir(parents=True, exist_ok=True)
+    if periods:
+        # One ads file per period keeps every file small (the GitHub web
+        # uploader and browser bridge cap single files) and lets new windows
+        # be added without rewriting old ones. latest.json lists them.
+        files = []
+        for pk in [p["key"] for p in periods]:
+            name = f"ads_{pk}.json"
+            (OUT.parent / name).write_text(json.dumps([a for a in ads if a.get("p") == pk], separators=(",", ":")))
+            files.append(name)
+        manifest["ads"] = []
+        manifest["ad_files"] = files
     OUT.write_text(json.dumps(manifest, separators=(",", ":")))
     print(f"Wrote {len(ads)} creatives, ${spend:,.0f} spend → {OUT}")
 
