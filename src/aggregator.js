@@ -21,10 +21,10 @@ const hasSpend = (a) => (a.metrics.spend || 0) > 0;
 
 // Parser format labels (scripts/parse_ad_name.py FORMATS) split by medium.
 const VIDEO_FORMATS = ["Video", "VSL", "UGC", "AI Avatar", "AI Characters", "AI Authority",
-  "Movie", "Song Ad", "B-Roll", "Hook/Lead", "TikTok Style", "Doctor", "Warehouse", "Organic", "Faceless", "Claymation", "AI UGC", "3D Animation", "Unboxing"];
+  "Movie", "Song Ad", "B-Roll", "Hook/Lead", "TikTok Style", "Doctor", "Warehouse", "Organic", "Faceless", "Claymation", "AI UGC", "3D Animation", "Unboxing", "AI Other"];
 const IMAGE_FORMATS = ["Static", "Long-Form Static"];
 
-const ADDITIVE = ["spend", "impressions", "clicks", "link_clicks", "rev", "txns"];
+const ADDITIVE = ["spend", "impressions", "clicks", "link_clicks", "rev", "txns", "v3s", "thru"];
 
 // Derived per-creative ratios, always computed from summed totals.
 export function withRatios(m) {
@@ -35,6 +35,8 @@ export function withRatios(m) {
   out.ctr = m.impressions ? ((m.link_clicks || 0) / m.impressions) * 100 : null;
   out.cpa = m.txns ? m.spend / m.txns : null;
   out.aov = m.txns && m.rev != null ? m.rev / m.txns : null;
+  out.hook_rate = m.v3s != null && m.impressions ? (m.v3s / m.impressions) * 100 : null;
+  out.hold_rate = m.v3s ? ((m.thru || 0) / m.v3s) * 100 : null;
   return out;
 }
 
@@ -59,7 +61,14 @@ export function mergePeriods(ads, keys) {
     }
     if (a.date && (!prev.date || a.date < prev.date)) { prev.date = a.date; prev.launch_date = a.launch_date; }
   }
-  return [...by.values()].map((r) => ({ ...r, metrics: withRatios(r.metrics) }));
+  return [...by.values()].map((r) => ({ ...r, media: mediaOf(r) ?? inferMedia(r.metrics), metrics: withRatios(r.metrics) }));
+}
+
+// Names that carry no format hint: Meta reports 3-second plays for any ad with
+// a video asset, so a ≥2% play rate means video; near-zero or none means static.
+function inferMedia(m) {
+  if (!m.impressions) return null;
+  return (m.v3s || 0) / m.impressions >= 0.02 ? "Video" : "Static";
 }
 
 // Video vs Static. The parser writes `media` (it also reads name hints like
@@ -88,13 +97,20 @@ export function aggregate(ads) {
       a.impressions += m.impressions || 0;
       a.clicks += m.clicks || 0;
       a.link_clicks += m.link_clicks || 0;
+      // Video metrics only from non-static ads: statics/carousels with a stray
+      // few 3s plays would otherwise swamp the hook-rate denominator.
+      if (m.v3s != null && r.media !== "Static") {
+        a.v3s += m.v3s || 0;
+        a.thru += m.thru || 0;
+        a.vid_impr += m.impressions || 0;
+      }
       a.pixel_rev += m.pixel_rev || 0;
       a.pixel_txns += m.pixel_txns || 0;
       a.nc_txns += m.nc_txns || 0;
       a.count += 1;
       return a;
     },
-    { spend: 0, rev: 0, txns: 0, impressions: 0, clicks: 0, link_clicks: 0,
+    { spend: 0, rev: 0, txns: 0, impressions: 0, clicks: 0, link_clicks: 0, v3s: 0, thru: 0, vid_impr: 0,
       pixel_rev: 0, pixel_txns: 0, nc_txns: 0, count: 0 }
   );
   // CSV exports without a purchase-value column ship rev: null. Keep that as
@@ -110,6 +126,10 @@ export function aggregate(ads) {
     ctr: tot.impressions ? (tot.link_clicks / tot.impressions) * 100 : null,
     cpa: tot.txns ? tot.spend / tot.txns : null,
     aov: hasRev && tot.txns ? tot.rev / tot.txns : null,
+    // Hook rate = 3-second plays / impressions; hold rate = ThruPlays / 3-second
+    // plays. Only impressions from records that carry video data count.
+    hook_rate: tot.vid_impr ? (tot.v3s / tot.vid_impr) * 100 : null,
+    hold_rate: tot.v3s ? (tot.thru / tot.v3s) * 100 : null,
     // Share of pixel-attributed purchases that came from new customers.
     pct_new: tot.pixel_txns ? (tot.nc_txns / tot.pixel_txns) * 100 : null,
   };
@@ -163,13 +183,39 @@ export function monthly(ads) {
 
 // Win rate: for each launch month, count creatives by spend threshold.
 // Denominators exclude never-spent creatives.
-export function winRate(ads, formatFilter = "blended") {
-  let filtered = ads.filter(hasSpend);
-  if (formatFilter === "video") {
-    filtered = filtered.filter((a) => mediaOf(a) === "Video");
-  } else if (formatFilter === "image") {
-    filtered = filtered.filter((a) => mediaOf(a) === "Static");
+// Roll ad-name records up to scripts (creative id) for win-rate purposes:
+// variants and re-uploads of one script count once, with summed spend.
+export function toScripts(ads) {
+  const by = new Map();
+  for (const a of ads) {
+    const k = `${a.account || ""}\u0001${a.creative_id || a.concept || a.ad_name}`;
+    const p = by.get(k);
+    if (!p) { by.set(k, { ...a, metrics: { ...a.metrics } }); continue; }
+    p.metrics.spend = (p.metrics.spend || 0) + (a.metrics.spend || 0);
+    p.metrics.rev = (p.metrics.rev || 0) + (a.metrics.rev || 0);
+    if (a.date && (!p.date || a.date < p.date)) p.date = a.date;
   }
+  return [...by.values()];
+}
+
+// Win rate by launch month.
+//   unit      "ad" (one row per ad name) or "script" (per creative id)
+//   floor     only units that spent at least this much count as launched;
+//             removes copies and drafts that never really ran
+//   dataStart / dataEnd (YYYY-MM-DD) let each month be flagged:
+//     pre      launched before the data window: only survivors are visible
+//     immature launched within 14 days of the data end: not done spending
+//     thin     fewer than minN launches: the rate is noise
+export function winRate(ads, formatFilter = "blended", opts = {}) {
+  const { unit = "ad", floor = 0, dataStart = null, dataEnd = null, minN = 20 } = opts;
+  let pool = ads;
+  if (formatFilter === "video") pool = pool.filter((a) => mediaOf(a) === "Video");
+  else if (formatFilter === "image") pool = pool.filter((a) => mediaOf(a) === "Static");
+  if (unit === "script") pool = toScripts(pool);
+  const filtered = pool.filter((a) => (a.metrics.spend || 0) > 0 && (a.metrics.spend || 0) >= floor);
+
+  const startMonth = dataStart ? dataStart.slice(0, 7) : null;
+  const matureCut = dataEnd ? new Date(new Date(dataEnd + "T00:00:00Z").getTime() - 14 * 864e5) : null;
 
   const byMonth = new Map();
   for (const ad of filtered) {
@@ -178,30 +224,28 @@ export function winRate(ads, formatFilter = "blended") {
     if (!byMonth.has(m)) byMonth.set(m, []);
     byMonth.get(m).push(ad);
   }
-
+  const rate = (list, min) => {
+    const n = list.filter((a) => (a.metrics.spend || 0) >= min).length;
+    return { n, rate: list.length ? (n / list.length) * 100 : 0 };
+  };
   const rows = Array.from(byMonth.entries())
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([month, monthAds]) => {
       const thresholds = {};
-      for (const t of THRESHOLDS) {
-        const n = monthAds.filter((a) => (a.metrics.spend || 0) >= t.min).length;
-        thresholds[t.key] = {
-          n,
-          rate: monthAds.length ? (n / monthAds.length) * 100 : 0,
-        };
-      }
-      return { month, total: monthAds.length, thresholds };
+      for (const t of THRESHOLDS) thresholds[t.key] = rate(monthAds, t.min);
+      const monthEnd = new Date(Date.UTC(+month.slice(0, 4), +month.slice(5, 7), 0));
+      const flags = [];
+      if (startMonth && month < startMonth) flags.push("pre");
+      if (matureCut && monthEnd > matureCut) flags.push("immature");
+      if (monthAds.length < minN) flags.push("thin");
+      return { month, total: monthAds.length, thresholds, flags };
     });
-
+  // TOTAL only counts clean months, so survivors and unfinished cohorts
+  // don't skew the headline rate.
+  const clean = rows.filter((r) => !r.flags.length).flatMap((r) => byMonth.get(r.month));
   const totalThresholds = {};
-  for (const t of THRESHOLDS) {
-    const n = filtered.filter((a) => (a.metrics.spend || 0) >= t.min).length;
-    totalThresholds[t.key] = {
-      n,
-      rate: filtered.length ? (n / filtered.length) * 100 : 0,
-    };
-  }
-  rows.push({ month: "TOTAL", total: filtered.length, thresholds: totalThresholds });
+  for (const t of THRESHOLDS) totalThresholds[t.key] = rate(clean, t.min);
+  rows.push({ month: "TOTAL", total: clean.length, thresholds: totalThresholds, flags: [] });
   return rows;
 }
 
@@ -224,6 +268,8 @@ export function toBreakdownRows(groups) {
       roas: g.roas,
       pct_new: g.pct_new,
       cpa: g.cpa,
+      hook_rate: g.hook_rate,
+      hold_rate: g.hold_rate,
       purchases: g.txns,
       aov: g.aov,
       ctr: g.ctr,
@@ -238,7 +284,7 @@ export function toBreakdownRows(groups) {
 
 // Dimensions available for pivoting and for the Data Clean Up tab.
 export const DIMENSIONS = [
-  "media", "angle", "product", "format", "awareness", "concept", "agency", "creator",
+  "media", "angle", "angle_detail", "stage", "product", "format", "awareness", "concept", "agency", "creator",
   "creative_id", "version", "build", "offer", "funnel", "buying_type", "geo",
   "account", "convention",
 ];

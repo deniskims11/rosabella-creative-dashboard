@@ -4,7 +4,7 @@ import {
   ResponsiveContainer, Cell, ComposedChart,
 } from "recharts";
 import {
-  aggregate, groupBy, monthly, winRate, toBreakdownRows, mergePeriods,
+  aggregate, groupBy, monthly, winRate, toBreakdownRows, mergePeriods, toScripts,
   DIMENSIONS, dimensionValues,
 } from "./aggregator.js";
 
@@ -13,7 +13,7 @@ const fmtFull = (n) => `$${Math.round(n).toLocaleString()}`;
 const fmtNum = (n) => n == null ? "—" : Number(n).toLocaleString();
 const fmtPct = (n) => n == null ? "—" : `${Number(n).toFixed(1)}%`;
 
-const TABS = ["Overview", "Win Rate", "Angles", "Concepts", "Agencies", "Creators", "Breakdowns", "Analysis", "Data Clean Up"];
+const TABS = ["Overview", "Momentum", "Win Rate", "Angles", "Concepts", "Agencies", "Creators", "Breakdowns", "Analysis", "Data Clean Up"];
 const THRESHOLDS = ["$1K", "$5K", "$15K", "$25K", "$50K", "$100K", "$150K+"];
 
 const RoasBadge = ({ roas }) => {
@@ -121,7 +121,7 @@ function AdListModal({ open, title, subtitle, ads, onClose }) {
   if (!open) return null;
 
   const downloadCsv = () => {
-    const headers = ["ad_name", "account", "product", "angle", "awareness", "format", "concept", "creative_id", "agency", "creator", "version", "build", "offer", "funnel", "geo", "launch_date", "spend", "rev", "txns", "roas", "cpa", "cpm", "ctr", "link_clicks", "impressions"];
+    const headers = ["ad_name", "account", "aid", "product", "angle", "angle_detail", "stage", "awareness", "format", "media", "concept", "creative_id", "agency", "creator", "version", "offer", "funnel", "geo", "date", "spend", "rev", "txns", "roas", "cpa", "cpm", "ctr", "hook_rate", "hold_rate", "link_clicks", "impressions"];
     const escape = (v) => v == null ? "" : typeof v === "string" && /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : String(v);
     const lines = [headers.join(",")];
     for (const a of sortedAds) {
@@ -155,60 +155,39 @@ function AdListModal({ open, title, subtitle, ads, onClose }) {
             <thead style={{ position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
               <tr style={{ borderBottom: "2px solid #E8DCD0" }}>
                 <SortHeader label="Ad Name" col="ad_name" sort={sort} setSort={setSort} align="left" />
-                <th style={{ ...th, textAlign: "center" }}>Preview</th>
+                <th style={{ ...th, textAlign: "center" }}>Ad</th>
                 <SortHeader label="Spend" col="spend" sort={sort} setSort={setSort} />
                 <SortHeader label="Revenue" col="rev" sort={sort} setSort={setSort} />
                 <SortHeader label="ROAS" col="roas" sort={sort} setSort={setSort} />
                 <SortHeader label="CPA" col="cpa" sort={sort} setSort={setSort} />
-                <SortHeader label="Clicks" col="clicks" sort={sort} setSort={setSort} />
+                <SortHeader label="Hook" col="hook_rate" sort={sort} setSort={setSort} />
+                <SortHeader label="Hold" col="hold_rate" sort={sort} setSort={setSort} />
                 <SortHeader label="Txns" col="txns" sort={sort} setSort={setSort} />
               </tr>
             </thead>
             <tbody>
               {sortedAds.slice(0, 500).map((a, i) => {
-                const adIds = a.meta_ad_ids || [];
-                const managerUrl = adIds[0] ? `https://business.facebook.com/adsmanager/manage/ads?selected_ad_ids=${adIds[0]}` : null;
-                const previewUrl = a.preview_link || managerUrl;
-                const previewTitle = a.preview_link
-                  ? `Preview the creative (no login). Meta ad ID: ${adIds[0] || "?"}`
-                  : `Open in Ads Manager (Meta login required). Ad ID: ${adIds[0] || "?"}`;
+                const managerUrl = a.aid
+                  ? `https://adsmanager.facebook.com/adsmanager/manage/ads?${a.act ? `act=${a.act}&` : ""}selected_ad_ids=${a.aid}`
+                  : null;
                 return (
                   <tr key={i} style={{ borderBottom: "1px solid #F5EDE5" }}>
                     <td style={{ ...td, fontSize: 10, fontFamily: "ui-monospace, monospace", maxWidth: 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={a.ad_name}>{a.ad_name}</td>
                     <td style={{ ...td, textAlign: "center", width: 72 }}>
-                      {a.thumbnail_url && previewUrl ? (
-                        <a href={previewUrl} target="_blank" rel="noopener noreferrer" title={previewTitle} style={{ display: "inline-block", lineHeight: 0 }}>
-                          <img src={a.thumbnail_url} alt=""
-                            loading="lazy"
-                            referrerPolicy="no-referrer"
-                            onError={e => {
-                              // Meta thumbnail URLs are signed and expire; the refresh
-                              // job re-signs them, so a stale one just falls back.
-                              const el = e.currentTarget;
-                              el.style.display = "none";
-                              el.parentElement.textContent = "Manager ↗";
-                            }}
-                            style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 4, border: "1px solid #E8DCD0", display: "block" }} />
-                        </a>
-                      ) : a.preview_link ? (
-                        <a href={a.preview_link} target="_blank" rel="noopener noreferrer"
-                          title={previewTitle}
-                          style={{ color: "#6B0010", textDecoration: "none", fontSize: 10, fontWeight: 600 }}>
-                          Preview ↗
-                        </a>
-                      ) : managerUrl ? (
+                      {managerUrl ? (
                         <a href={managerUrl} target="_blank" rel="noopener noreferrer"
-                          title={previewTitle}
-                          style={{ color: "#b0978f", textDecoration: "none", fontSize: 10, fontWeight: 600 }}>
-                          Manager ↗
+                          title={`Open this ad in Ads Manager (Meta login required). Ad ID ${a.aid}`}
+                          style={{ color: "#6B0010", textDecoration: "none", fontSize: 10, fontWeight: 600 }}>
+                          Open ↗
                         </a>
-                      ) : <span style={{ color: "#D8C8BC", fontSize: 10 }}>—</span>}
+                      ) : <span style={{ color: "#D8C8BC", fontSize: 10 }} title="No Ad ID in this period's export">—</span>}
                     </td>
                     <td style={{ ...td, textAlign: "right" }}>{fmt(a.metrics.spend)}</td>
                     <td style={{ ...td, textAlign: "right" }}>{fmt(a.metrics.rev)}</td>
                     <td style={{ ...td, textAlign: "right" }}><RoasBadge roas={a.metrics.roas} /></td>
                     <td style={{ ...td, textAlign: "right" }}>{a.metrics.cpa ? `$${a.metrics.cpa.toFixed(0)}` : "—"}</td>
-                    <td style={{ ...td, textAlign: "right", color: "#8a6f68" }}>{fmtNum(a.metrics.clicks)}</td>
+                    <td style={{ ...td, textAlign: "right", color: "#8a6f68" }}>{fmtPct(a.metrics.hook_rate)}</td>
+                    <td style={{ ...td, textAlign: "right", color: "#8a6f68" }}>{fmtPct(a.metrics.hold_rate)}</td>
                     <td style={{ ...td, textAlign: "right", color: "#8a6f68" }}>{fmtNum(a.metrics.txns)}</td>
                   </tr>
                 );
@@ -234,13 +213,17 @@ function BreakdownTable({ rows, nameLabel = "Name", onRowClick }) {
     { key: "cpa", label: "CPA" },
     { key: "purchases", label: "Purchases" },
     { key: "aov", label: "AOV" },
+    { key: "hook_rate", label: "Hook" },
+    { key: "hold_rate", label: "Hold" },
     { key: "cpm", label: "CPM" },
     { key: "winRate1k", label: "WR $1K" },
     { key: "winRate15k", label: "WR $15K" },
     { key: "winRate50k", label: "WR $50K" },
   ];
+  const [limit, setLimit] = useState(300);
   const sorted = useMemo(() => sortRows(rows, sort.col, sort.dir), [rows, sort]);
   return (
+    <>
     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
       <thead>
         <tr style={{ borderBottom: "2px solid #E8DCD0" }}>
@@ -248,7 +231,7 @@ function BreakdownTable({ rows, nameLabel = "Name", onRowClick }) {
         </tr>
       </thead>
       <tbody>
-        {sorted.map((r, i) => (
+        {sorted.slice(0, limit).map((r, i) => (
           <tr key={i} onClick={() => onRowClick?.(r)} style={{ borderBottom: "1px solid #F5EDE5", cursor: onRowClick ? "pointer" : "default" }}
               onMouseEnter={e => onRowClick && (e.currentTarget.style.background = "#FBF7F4")}
               onMouseLeave={e => onRowClick && (e.currentTarget.style.background = "transparent")}>
@@ -260,6 +243,8 @@ function BreakdownTable({ rows, nameLabel = "Name", onRowClick }) {
             <td style={{ ...td, textAlign: "right" }}>{r.cpa ? `$${r.cpa.toFixed(0)}` : "—"}</td>
             <td style={{ ...td, textAlign: "right", color: "#8a6f68" }}>{fmtNum(r.purchases)}</td>
             <td style={{ ...td, textAlign: "right", color: "#8a6f68" }}>{r.aov ? `$${r.aov.toFixed(0)}` : "—"}</td>
+            <td style={{ ...td, textAlign: "right", color: "#8a6f68" }} title="3-second plays / impressions">{fmtPct(r.hook_rate)}</td>
+            <td style={{ ...td, textAlign: "right", color: "#8a6f68" }} title="ThruPlays / 3-second plays">{fmtPct(r.hold_rate)}</td>
             <td style={{ ...td, textAlign: "right", color: "#8a6f68" }}>{r.cpm ? `$${r.cpm.toFixed(1)}` : "—"}</td>
             <td style={{ ...td, textAlign: "right" }}>{fmtPct(r.winRate1k)}</td>
             <td style={{ ...td, textAlign: "right" }}>{fmtPct(r.winRate15k)}</td>
@@ -268,6 +253,13 @@ function BreakdownTable({ rows, nameLabel = "Name", onRowClick }) {
         ))}
       </tbody>
     </table>
+    {sorted.length > limit && (
+      <div style={{ textAlign: "center", padding: 10, fontSize: 12, color: "#8a6f68" }}>
+        Showing {limit.toLocaleString()} of {sorted.length.toLocaleString()} ·{" "}
+        <button onClick={() => setLimit(limit + 500)} style={{ border: "1px solid #E8DCD0", background: "#fff", borderRadius: 6, padding: "3px 10px", cursor: "pointer", fontSize: 12 }}>Show 500 more</button>
+      </div>
+    )}
+    </>
   );
 }
 
@@ -300,8 +292,16 @@ function WinRateTable({ wrData }) {
         </thead>
         <tbody>
           {rows.map((row, i) => (
-            <tr key={i} style={{ borderBottom: "1px solid #F5EDE5" }}>
-              <td style={td}>{row.month}</td>
+            <tr key={i} style={{ borderBottom: "1px solid #F5EDE5", opacity: row.flags?.length ? 0.45 : 1 }}
+                title={row.flags?.length ? "Excluded from TOTAL and the trend line" : undefined}>
+              <td style={td}>
+                {row.month}
+                {(row.flags || []).map(f => (
+                  <span key={f} style={{ marginLeft: 6, fontSize: 9, padding: "1px 5px", borderRadius: 3, background: "#F5EDE5", color: "#8a6f68", fontWeight: 600 }}>
+                    {f === "pre" ? "survivors only" : f === "immature" ? "still ramping" : "small sample"}
+                  </span>
+                ))}
+              </td>
               <td style={{ ...td, textAlign: "right" }}>{row.total.toLocaleString()}</td>
               {THRESHOLDS.map(t => {
                 const d = row.thresholds[t];
@@ -316,7 +316,7 @@ function WinRateTable({ wrData }) {
           ))}
           {total && (
             <tr style={{ borderBottom: "1px solid #F5EDE5", background: "#FBF7F4", fontWeight: 700 }}>
-              <td style={td}>{total.month}</td>
+              <td style={td}>TOTAL <span style={{ fontWeight: 400, fontSize: 10, color: "#b0978f" }}>(clean months only)</span></td>
               <td style={{ ...td, textAlign: "right" }}>{total.total.toLocaleString()}</td>
               {THRESHOLDS.map(t => {
                 const d = total.thresholds[t];
@@ -346,6 +346,172 @@ function multiGroupBy(ads, dims) {
   return Array.from(buckets.values()).map(b => ({ name: b.key, values: b.values, ads: b.ads, ...aggregate(b.ads) }));
 }
 
+
+// ====================== Momentum ======================
+// Latest window vs the window before it, per concept/script/agency/angle.
+// Spend is compared per day because windows differ in length.
+const MOMENTUM_DIMS = [["concept", "Concept"], ["creative_id", "Script"], ["agency", "Agency"], ["angle", "Angle"], ["format", "Format"], ["ad_name", "Ad"]];
+const STATUS_STYLE = {
+  New: { bg: "#dbeafe", fg: "#1e40af" }, Scaling: { bg: "#dcfce7", fg: "#166534" },
+  Steady: { bg: "#F5EDE5", fg: "#8a6f68" }, Fading: { bg: "#fef9c3", fg: "#854d0e" },
+  Stopped: { bg: "#fee2e2", fg: "#991b1b" },
+};
+function MomentumTab({ manifest, account, mappings, openModal }) {
+  const cfg = manifest?.momentum;
+  const [dim, setDim] = useState("concept");
+  const [minSpend, setMinSpend] = useState(5000);
+  const [status, setStatus] = useState("All");
+  const [sort, setSort] = useState({ col: "lat_day", dir: "desc" });
+  const days = (key) => {
+    const p = (manifest?.periods || []).find(x => x.key === key);
+    return p ? Math.round((new Date(p.end) - new Date(p.start)) / 864e5) + 1 : 1;
+  };
+  const rows = useMemo(() => {
+    if (!cfg) return [];
+    const dl = days(cfg.latest), dp = days(cfg.previous);
+    const groups = new Map();
+    for (const a0 of manifest.ads) {
+      if (a0.p !== cfg.latest && a0.p !== cfg.previous) continue;
+      if (account !== "__all" && a0.account !== account) continue;
+      const a = { ...a0 };
+      for (const [d, map] of Object.entries(mappings || {})) if (a[d] != null && map[a[d]]) a[d] = map[a[d]];
+      const k = a[dim] ?? "(untagged)";
+      if (!groups.has(k)) groups.set(k, { name: k, lat: [], prev: [] });
+      groups.get(k)[a.p === cfg.latest ? "lat" : "prev"].push(a);
+    }
+    return [...groups.values()].map(g => {
+      const L = aggregate(g.lat), P = aggregate(g.prev);
+      const lat_day = L.spend / dl, prev_day = P.spend / dp;
+      const change = prev_day ? (lat_day / prev_day - 1) * 100 : null;
+      const st = !P.spend ? "New" : !L.spend ? "Stopped" : change >= 50 ? "Scaling" : change <= -50 ? "Fading" : "Steady";
+      return { name: g.name, ads: [...g.lat, ...g.prev], status: st, lat_day, prev_day, change,
+        lat_roas: L.spend ? L.roas : null, prev_roas: P.spend ? P.roas : null,
+        roas_delta: L.spend && P.spend && L.roas != null && P.roas != null ? L.roas - P.roas : null,
+        lat_cpa: L.cpa, total: L.spend + P.spend };
+    }).filter(r => r.total >= minSpend);
+  }, [manifest, cfg, dim, account, mappings, minSpend]);
+  const counts = useMemo(() => rows.reduce((c, r) => (c[r.status] = (c[r.status] || 0) + 1, c), {}), [rows]);
+  const shown = useMemo(() => {
+    const list = status === "All" ? rows : rows.filter(r => r.status === status);
+    return sortRows(list, sort.col, sort.dir);
+  }, [rows, status, sort]);
+  if (!cfg) return <div style={{ padding: 20, color: "#8a6f68" }}>Momentum needs two windows in the data.</div>;
+  const lp = (manifest.periods || []).find(x => x.key === cfg.latest), pp = (manifest.periods || []).find(x => x.key === cfg.previous);
+  const cols = [["name", MOMENTUM_DIMS.find(d => d[0] === dim)[1], "left"], ["status", "Status", "left"], ["prev_day", "Spend/day before"], ["lat_day", "Spend/day now"], ["change", "Δ spend/day"], ["prev_roas", "ROAS before"], ["lat_roas", "ROAS now"], ["roas_delta", "Δ ROAS"], ["lat_cpa", "CPA now"]];
+  return (
+    <div>
+      <div style={{ background: "#fff", borderRadius: 10, padding: 16, border: "1px solid #E8DCD0", marginBottom: 12 }}>
+        <div style={{ fontSize: 13, color: "#3a2429", marginBottom: 10 }}>
+          <b>Now</b> = {lp?.start} → {lp?.end} ({days(cfg.latest)} days) vs <b>before</b> = {pp?.start} → {pp?.end} ({days(cfg.previous)} days). Spend compared per day. Ignores the Period selector; follows the Ad account selector.
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <select value={dim} onChange={e => setDim(e.target.value)} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #D8C8BC", fontSize: 12, fontWeight: 600 }}>
+            {MOMENTUM_DIMS.map(([k, l]) => <option key={k} value={k}>Group by: {l}</option>)}
+          </select>
+          <select value={minSpend} onChange={e => setMinSpend(+e.target.value)} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #D8C8BC", fontSize: 12, fontWeight: 600 }}>
+            {[1000, 5000, 20000, 50000].map(v => <option key={v} value={v}>Min combined spend {fmt(v)}</option>)}
+          </select>
+          {["All", "New", "Scaling", "Steady", "Fading", "Stopped"].map(sv => (
+            <button key={sv} onClick={() => setStatus(sv)} style={{ padding: "5px 10px", borderRadius: 14, border: "1px solid #D8C8BC", cursor: "pointer", fontSize: 11, fontWeight: 600,
+              background: status === sv ? "#50000B" : (STATUS_STYLE[sv]?.bg || "#fff"), color: status === sv ? "#fff" : (STATUS_STYLE[sv]?.fg || "#8a6f68") }}>
+              {sv} {sv === "All" ? rows.length : (counts[sv] || 0)}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ background: "#fff", borderRadius: 10, padding: 16, border: "1px solid #E8DCD0", overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead><tr style={{ borderBottom: "2px solid #E8DCD0" }}>
+            {cols.map(([k, l, al]) => <SortHeader key={k} label={l} col={k} sort={sort} setSort={setSort} align={al || "right"} />)}
+          </tr></thead>
+          <tbody>
+            {shown.slice(0, 300).map((r, i) => (
+              <tr key={i} onClick={() => openModal(`${r.status}: ${r.name}`, `Spend/day ${fmt(r.prev_day)} → ${fmt(r.lat_day)}`, r.ads)}
+                  style={{ borderBottom: "1px solid #F5EDE5", cursor: "pointer" }}>
+                <td style={{ ...td, fontWeight: 600, maxWidth: 420 }}>{r.name}</td>
+                <td style={td}><span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: STATUS_STYLE[r.status].bg, color: STATUS_STYLE[r.status].fg }}>{r.status}</span></td>
+                <td style={{ ...td, textAlign: "right", color: "#8a6f68" }}>{fmt(r.prev_day)}</td>
+                <td style={{ ...td, textAlign: "right", fontWeight: 600 }}>{fmt(r.lat_day)}</td>
+                <td style={{ ...td, textAlign: "right", color: r.change == null ? "#b0978f" : r.change >= 0 ? "#166534" : "#991b1b" }}>{r.change == null ? "new" : `${r.change >= 0 ? "+" : ""}${r.change.toFixed(0)}%`}</td>
+                <td style={{ ...td, textAlign: "right" }}><RoasBadge roas={r.prev_roas} /></td>
+                <td style={{ ...td, textAlign: "right" }}><RoasBadge roas={r.lat_roas} /></td>
+                <td style={{ ...td, textAlign: "right", color: r.roas_delta == null ? "#b0978f" : r.roas_delta >= 0 ? "#166534" : "#991b1b" }}>{r.roas_delta == null ? "—" : `${r.roas_delta >= 0 ? "+" : ""}${r.roas_delta.toFixed(2)}`}</td>
+                <td style={{ ...td, textAlign: "right", color: "#8a6f68" }}>{r.lat_cpa ? `$${r.lat_cpa.toFixed(0)}` : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {shown.length > 300 && <p style={{ fontSize: 11, color: "#b0978f", textAlign: "center" }}>Showing top 300 of {shown.length}.</p>}
+      </div>
+    </div>
+  );
+}
+
+// ====================== Agency scorecard ======================
+// Per agency on the selected period: scripts launched (>= $100), how many
+// reached each spend tier, spend share, and ROAS / CPA against the account.
+function AgencyScorecard({ ads, openModal }) {
+  const [sort, setSort] = useState({ col: "spend", dir: "desc" });
+  const rows = useMemo(() => {
+    const acct = aggregate(ads);
+    const by = new Map();
+    for (const a of ads) {
+      const k = a.agency ?? "(untagged)";
+      if (!by.has(k)) by.set(k, []);
+      by.get(k).push(a);
+    }
+    return [...by.entries()].map(([name, list]) => {
+      const g = aggregate(list);
+      const scripts = toScripts(list).filter(s => (s.metrics.spend || 0) >= 100);
+      const tier = (min) => scripts.filter(s => s.metrics.spend >= min).length;
+      return {
+        name, ads: list, scripts: scripts.length, w1k: tier(1000), w15k: tier(15000), w50k: tier(50000),
+        hit1k: scripts.length ? tier(1000) / scripts.length * 100 : null,
+        hit15k: scripts.length ? tier(15000) / scripts.length * 100 : null,
+        spend: g.spend, share: acct.spend ? g.spend / acct.spend * 100 : 0,
+        roas: g.roas, roas_idx: acct.roas ? (g.roas / acct.roas) * 100 : null,
+        cpa: g.cpa, cpa_idx: acct.cpa && g.cpa ? (g.cpa / acct.cpa) * 100 : null,
+        hook_rate: g.hook_rate, hold_rate: g.hold_rate,
+      };
+    }).filter(r => r.spend > 0);
+  }, [ads]);
+  const sorted = useMemo(() => sortRows(rows, sort.col, sort.dir), [rows, sort]);
+  const idx = (v, goodHigh) => v == null ? "—" : (
+    <span style={{ color: (goodHigh ? v >= 105 : v <= 95) ? "#166534" : (goodHigh ? v <= 95 : v >= 105) ? "#991b1b" : "#8a6f68", fontWeight: 600 }}>{v.toFixed(0)}</span>);
+  const cols = [["name", "Agency", "left"], ["scripts", "Scripts ≥$100"], ["w1k", "≥$1K"], ["hit1k", "Hit $1K"], ["w15k", "≥$15K"], ["hit15k", "Hit $15K"], ["w50k", "≥$50K"], ["spend", "Spend"], ["share", "Share"], ["roas", "ROAS"], ["roas_idx", "ROAS idx"], ["cpa", "CPA"], ["cpa_idx", "CPA idx"], ["hook_rate", "Hook"], ["hold_rate", "Hold"]];
+  return (
+    <div style={{ background: "#fff", borderRadius: 10, padding: 16, border: "1px solid #E8DCD0", overflowX: "auto", marginBottom: 16 }}>
+      <h3 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 4px", color: "#3a2429" }}>Agency scorecard</h3>
+      <p style={{ fontSize: 11, color: "#b0978f", margin: "0 0 10px" }}>Scripts = unique creative IDs that spent ≥ $100 in the selected period. Index = agency vs account average (100 = average; ROAS higher is better, CPA lower is better).</p>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+        <thead><tr style={{ borderBottom: "2px solid #E8DCD0" }}>
+          {cols.map(([k, l, al]) => <SortHeader key={k} label={l} col={k} sort={sort} setSort={setSort} align={al || "right"} />)}
+        </tr></thead>
+        <tbody>
+          {sorted.map((r, i) => (
+            <tr key={i} onClick={() => openModal(`Agency: ${r.name}`, `${r.scripts} scripts · Spend ${fmt(r.spend)}`, r.ads)} style={{ borderBottom: "1px solid #F5EDE5", cursor: "pointer" }}>
+              <td style={{ ...td, fontWeight: 600 }}>{r.name}</td>
+              <td style={{ ...td, textAlign: "right" }}>{fmtNum(r.scripts)}</td>
+              <td style={{ ...td, textAlign: "right" }}>{fmtNum(r.w1k)}</td>
+              <td style={{ ...td, textAlign: "right" }}>{fmtPct(r.hit1k)}</td>
+              <td style={{ ...td, textAlign: "right" }}>{fmtNum(r.w15k)}</td>
+              <td style={{ ...td, textAlign: "right" }}>{fmtPct(r.hit15k)}</td>
+              <td style={{ ...td, textAlign: "right" }}>{fmtNum(r.w50k)}</td>
+              <td style={{ ...td, textAlign: "right", fontWeight: 600 }}>{fmt(r.spend)}</td>
+              <td style={{ ...td, textAlign: "right", color: "#8a6f68" }}>{fmtPct(r.share)}</td>
+              <td style={{ ...td, textAlign: "right" }}><RoasBadge roas={r.roas} /></td>
+              <td style={{ ...td, textAlign: "right" }}>{idx(r.roas_idx, true)}</td>
+              <td style={{ ...td, textAlign: "right" }}>{r.cpa ? `$${r.cpa.toFixed(0)}` : "—"}</td>
+              <td style={{ ...td, textAlign: "right" }}>{idx(r.cpa_idx, false)}</td>
+              <td style={{ ...td, textAlign: "right", color: "#8a6f68" }}>{fmtPct(r.hook_rate)}</td>
+              <td style={{ ...td, textAlign: "right", color: "#8a6f68" }}>{fmtPct(r.hold_rate)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 // ====================== Main component ======================
 export default function Dashboard() {
   const [manifest, setManifest] = useState(null);
@@ -355,6 +521,8 @@ export default function Dashboard() {
   // Win Rate state
   const [wrFormat, setWrFormat] = useState("blended");
   const [wrAgency, setWrAgency] = useState("__all");
+  const [wrUnit, setWrUnit] = useState("script");
+  const [wrFloor, setWrFloor] = useState(100);
   // Ad account filter. "__all" = blended Rosabella across every account.
   const [account, setAccount] = useState("__all");
   const [periodView, setPeriodView] = useState("all");
@@ -402,6 +570,9 @@ export default function Dashboard() {
               return r.json();
             })));
           m = { ...m, ads: parts.flat() };
+        }
+        if (m.daily_file) {
+          m.daily = await fetch(`${import.meta.env.BASE_URL}data/${m.daily_file}`).then(r => r.ok ? r.json() : []).catch(() => []);
         }
         setManifest(m);
       })
@@ -471,9 +642,50 @@ export default function Dashboard() {
   }, [manifest]);
 
   const totals = useMemo(() => aggregate(ads), [ads]);
-  const monthlyData = useMemo(() => monthly(ads), [ads]);
+  // Daily trend (whole data range, follows the account selector, not the
+  // period selector). ROAS is a 7-day rolling ratio of sums.
+  const dailyData = useMemo(() => {
+    const rows = (manifest?.daily ?? []).filter(r => account === "__all" || r.account === account);
+    const by = new Map();
+    for (const r of rows) {
+      const v = by.get(r.d) || { d: r.d, spend: 0, rev: 0 };
+      v.spend += r.spend; v.rev += r.rev; by.set(r.d, v);
+    }
+    const days = [...by.values()].sort((a, b) => a.d.localeCompare(b.d));
+    return days.map((x, i) => {
+      const win = days.slice(Math.max(0, i - 6), i + 1);
+      const s = win.reduce((t, w) => t + w.spend, 0), rv = win.reduce((t, w) => t + w.rev, 0);
+      return { ...x, roas7: s ? rv / s : null };
+    });
+  }, [manifest, account]);
+  const [trendGrain, setTrendGrain] = useState("day");
+  // Weekly view: Monday-start weeks, plain weekly ROAS.
+  const trendData = useMemo(() => {
+    if (trendGrain === "day") return dailyData;
+    const by = new Map();
+    for (const x of dailyData) {
+      const dt = new Date(x.d + "T00:00:00Z");
+      dt.setUTCDate(dt.getUTCDate() - ((dt.getUTCDay() + 6) % 7));
+      const k = dt.toISOString().slice(0, 10);
+      const v = by.get(k) || { d: k, spend: 0, rev: 0 };
+      v.spend += x.spend; v.rev += x.rev; by.set(k, v);
+    }
+    return [...by.values()].sort((a, b) => a.d.localeCompare(b.d)).map(w => ({ ...w, roas7: w.spend ? w.rev / w.spend : null }));
+  }, [dailyData, trendGrain]);
+
+  // ROAS for a month that barely spent is noise; hide it below 2% of the
+  // busiest month (and below $10K).
+  const monthlyData = useMemo(() => {
+    const rows = monthly(ads);
+    const max = Math.max(0, ...rows.map(r => r.spend));
+    return rows.map(r => (r.spend < Math.max(10000, max * 0.02) ? { ...r, roas: null } : r));
+  }, [ads]);
   const wrAgencies = useMemo(() => dimensionValues(ads, "agency").filter(v => v.value !== "(untagged)"), [ads]);
-  const wrData = useMemo(() => winRate(wrAgency === "__all" ? ads : ads.filter(a => (a.agency ?? "(untagged)") === wrAgency), wrFormat), [ads, wrFormat, wrAgency]);
+  const wrData = useMemo(() => winRate(
+    wrAgency === "__all" ? ads : ads.filter(a => (a.agency ?? "(untagged)") === wrAgency),
+    wrFormat,
+    { unit: wrUnit, floor: wrFloor, dataStart: activeView?.start, dataEnd: activeView?.end },
+  ), [ads, wrFormat, wrAgency, wrUnit, wrFloor, activeView]);
   const concepts = useMemo(() => toBreakdownRows(groupBy(ads, "concept")), [ads]);
   const angles = useMemo(() => toBreakdownRows(groupBy(ads, "angle")), [ads]);
   const agencies = useMemo(() => toBreakdownRows(groupBy(ads, "agency")), [ads]);
@@ -666,7 +878,7 @@ export default function Dashboard() {
   if (!manifest) return <div style={{ padding: 24, fontFamily: "sans-serif", color: "#8a6f68" }}>Loading Meta data…</div>;
 
   const ALL_DIMS_LABELS = {
-    media: "Video vs Static", angle: "Angle", format: "Format", concept: "Concept", product: "Product",
+    media: "Video vs Static", angle: "Angle", angle_detail: "Angle (detail)", stage: "Testing phase (TP)", format: "Format", concept: "Concept", product: "Product",
     awareness: "Awareness", agency: "Agency", creator: "Creator",
     creative_id: "Creative ID", version: "Version", build: "New / Var",
     offer: "Offer", funnel: "Funnel", buying_type: "Buying Type", geo: "Geo",
@@ -760,14 +972,41 @@ export default function Dashboard() {
               ))}
             </div>
 
+            {dailyData.length > 0 && (
+              <div style={{ background: "#fff", borderRadius: 10, padding: 20, border: "1px solid #E8DCD0", marginBottom: 20 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <h3 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 4px", color: "#3a2429" }}>{trendGrain === "day" ? "Daily spend & 7-day ROAS" : "Weekly spend & ROAS"}</h3>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    {[["day", "Daily"], ["week", "Weekly"]].map(([k, l]) => (
+                      <button key={k} onClick={() => setTrendGrain(k)} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 6, cursor: "pointer", border: "1px solid #E8DCD0", background: trendGrain === k ? "#3a2429" : "#fff", color: trendGrain === k ? "#fff" : "#3a2429" }}>{l}</button>
+                    ))}
+                  </div>
+                </div>
+                <p style={{ fontSize: 11, color: "#b0978f", margin: "0 0 10px" }}>Calendar {trendGrain === "day" ? "days" : "weeks (Mon start)"} ({dailyData[0].d} → {dailyData[dailyData.length - 1].d}), all spend incl. deleted campaigns. Follows the Ad account selector, not the Period selector.</p>
+                <ResponsiveContainer width="100%" height={240}>
+                  <ComposedChart data={trendData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#F5EDE5" />
+                    <XAxis dataKey="d" tick={{ fontSize: 10, fill: "#b0978f" }} minTickGap={30} />
+                    <YAxis yAxisId="left" tick={{ fontSize: 11, fill: "#b0978f" }} tickFormatter={v => fmt(v)} />
+                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: "#b0978f" }} domain={[0, "auto"]} tickFormatter={v => `${Number(v).toFixed(1)}x`} />
+                    <Tooltip formatter={(v, n) => v == null ? "—" : (n === "7-day ROAS" || n === "ROAS") ? `${v.toFixed(2)}x` : fmtFull(v)} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Bar yAxisId="left" dataKey="spend" fill="#93c5fd" name="Spend" />
+                    <Line yAxisId="right" dataKey="roas7" stroke="#f97316" strokeWidth={2} dot={false} name={trendGrain === "day" ? "7-day ROAS" : "ROAS"} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
             <div style={{ background: "#fff", borderRadius: 10, padding: 20, border: "1px solid #E8DCD0", marginBottom: 20 }}>
               <h3 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 16px", color: "#3a2429" }}>Monthly Spend vs Revenue & ROAS (by ad creation month)</h3>
+              <p style={{ fontSize: 11, color: "#b0978f", margin: "-10px 0 10px" }}>Grouped by the month each ad was launched; ROAS is hidden for months that barely spent.</p>
               <ResponsiveContainer width="100%" height={280}>
                 <ComposedChart data={monthlyData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#F5EDE5" />
                   <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#b0978f" }} />
                   <YAxis yAxisId="left" tick={{ fontSize: 11, fill: "#b0978f" }} tickFormatter={v => fmt(v)} />
-                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: "#b0978f" }} domain={[0, 1.5]} tickFormatter={v => `${v}x`} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: "#b0978f" }} domain={[0, "auto"]} allowDataOverflow={false} tickFormatter={v => `${Number(v).toFixed(1)}x`} />
                   <Tooltip formatter={(v, n) => v == null ? "—" : n === "ROAS" ? `${v.toFixed(2)}x` : fmtFull(v)} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Bar yAxisId="left" dataKey="spend" fill="#93c5fd" name="Spend" radius={[3, 3, 0, 0]} />
@@ -778,7 +1017,7 @@ export default function Dashboard() {
             </div>
 
             <div style={{ background: "#fff", borderRadius: 10, padding: 20, border: "1px solid #E8DCD0" }}>
-              <h3 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 16px", color: "#3a2429" }}>Monthly Creative Volume (Video vs Image)</h3>
+              <h3 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 16px", color: "#3a2429" }}>Monthly Creative Volume (Video vs Static)</h3>
               <ResponsiveContainer width="100%" height={240}>
                 <BarChart data={monthlyData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#F5EDE5" />
@@ -787,7 +1026,7 @@ export default function Dashboard() {
                   <Tooltip />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Bar dataKey="video" fill="#818cf8" name="Video" stackId="a" />
-                  <Bar dataKey="image" fill="#fbbf24" name="Image" stackId="a" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="image" fill="#fbbf24" name="Static" stackId="a" radius={[3, 3, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -808,6 +1047,17 @@ export default function Dashboard() {
               <select value={wrThreshold} onChange={e => setWrThreshold(e.target.value)}
                 style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #D8C8BC", fontSize: 12, fontWeight: 600, color: "#3a2429" }}>
                 {THRESHOLDS.map(t => <option key={t} value={t}>Threshold: {t}</option>)}
+              </select>
+              <select value={wrUnit} onChange={e => setWrUnit(e.target.value)} title="Count each script (creative ID) once, or every ad name separately"
+                style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #D8C8BC", fontSize: 12, fontWeight: 600, color: "#3a2429" }}>
+                <option value="script">Count: per script</option>
+                <option value="ad">Count: per ad name</option>
+              </select>
+              <select value={wrFloor} onChange={e => setWrFloor(+e.target.value)} title="Only count launches that spent at least this much"
+                style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #D8C8BC", fontSize: 12, fontWeight: 600, color: "#3a2429" }}>
+                <option value={0}>Launched = any spend</option>
+                <option value={100}>Launched = $100+ spend</option>
+                <option value={500}>Launched = $500+ spend</option>
               </select>
               <select value={wrAgency} onChange={e => setWrAgency(e.target.value)}
                 style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #D8C8BC", fontSize: 12, fontWeight: 600, color: "#3a2429" }}>
@@ -830,11 +1080,14 @@ export default function Dashboard() {
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Bar yAxisId="left" dataKey="total" fill="#D8C8BC" name="Total Launched" radius={[3, 3, 0, 0]} />
                   <Line yAxisId="right" type="monotone" stroke="#ef4444" strokeWidth={2.5} dot={{ r: 4 }} name="Win Rate"
-                    dataKey={(d) => d.thresholds[wrThreshold]?.rate || 0} />
+                    connectNulls dataKey={(d) => (d.flags && d.flags.length) ? null : (d.thresholds[wrThreshold]?.rate || 0)} />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
 
+            <p style={{ fontSize: 11, color: "#b0978f", margin: "0 0 8px" }}>
+              Greyed months are excluded from the trend line and the TOTAL: <b>survivors only</b> (launched before the data window, so only ads that kept spending are visible), <b>still ramping</b> (launched in the last 14 days), or <b>small sample</b> (fewer than 20 launches).
+            </p>
             <WinRateTable wrData={wrData} />
           </div>
         )}
@@ -853,6 +1106,9 @@ export default function Dashboard() {
           </div>
         )}
 
+        {tab === "Momentum" && <MomentumTab manifest={manifest} account={account} mappings={mappings} openModal={openModal} />}
+
+        {tab === "Agencies" && <AgencyScorecard ads={ads} openModal={openModal} />}
         {tab === "Agencies" && (
           <div style={{ background: "#fff", borderRadius: 10, padding: 16, border: "1px solid #E8DCD0", overflowX: "auto" }}>
             <h3 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 12px", color: "#3a2429" }}>Agency Performance ({agencies.length}) · <span style={{ fontWeight: 400, color: "#b0978f" }}>click a row to drill into creatives</span></h3>
