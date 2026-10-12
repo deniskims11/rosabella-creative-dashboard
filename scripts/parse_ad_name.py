@@ -31,8 +31,8 @@ import sys
 from typing import Optional
 
 _SCHEMA_KEYS = (
-    "ad_name", "convention", "creative_id", "agency", "angle", "awareness",
-    "format", "media", "product", "concept", "creator", "version", "build",
+    "ad_name", "convention", "creative_id", "agency", "angle", "angle_detail",
+    "awareness", "stage", "format", "media", "product", "concept", "creator", "version", "build",
     "copy_no", "geo", "buying_type", "funnel", "offer", "launch_date",
     "date", "dedup_key",
 )
@@ -64,12 +64,60 @@ ANGLES = {
     "sale": "Sale", "glutabenefits": "Glutathione Benefits",
     "symptomstack": "Symptom Stack",
     "neuropathy": "Neuropathy", "liverhealth": "Liver Health",
-    "ldl": "High Cholesterol", "prostatehealth": "Prostate Health", "prostate": "Prostate Health",
+    "ldl": "High Cholesterol", "hbs": "Blood Sugar", "menopause": "Menopause",
+    "erectiledisfunction": "Erectile Dysfunction", "supplementcost": "Supplement Cost",
+    "productquality": "Product Quality", "prostatehealth": "Prostate Health", "prostate": "Prostate Health",
     "productquality": "Product Quality", "inflammation": "Inflammation",
     "flash-sale": "Sale", "flashsale": "Sale",
 }
 
 AWARENESS = {"SA", "UA", "PDA", "PA", "PR", "UN", "MA", "TP1", "TP2", "TP3", "NN"}
+
+# Two different systems were sharing one field: TP1-3 is the team's testing
+# phase, the rest are Schwartz awareness levels. They are split into `stage`
+# and `awareness`. UN is written as a synonym of UA; NN means "not set".
+STAGES = {"TP1": "TP1", "TP2": "TP2", "TP3": "TP3"}
+AWARENESS_LABELS = {
+    "UA": "Unaware", "UN": "Unaware", "PA": "Problem aware", "PDA": "Problem aware",
+    "SA": "Solution aware", "PR": "Product aware", "MA": "Most aware",
+}
+FUNNEL_TOKENS = {"BOF": "BOFU", "TOF": "TOFU", "MOF": "MOFU", "BOFU": "BOFU", "TOFU": "TOFU", "MOFU": "MOFU"}
+# Tokens that sit between the version and the hook in ID-first names.
+FILLER = {"NONE", "BOTH", "FRMT", "MSG", "NO", "DN", "OTHER", "NETNEW", "NEW", "VAR", "Y", "N"}
+
+# Raw angle labels collapse into families so tables stay readable; the raw
+# label is kept as angle_detail. First matching keyword wins.
+ANGLE_FAMILIES = [
+    ("High Cholesterol", ["cholesterol", "ldl", "statin"]),
+    ("Blood Sugar", ["blood sugar", "diabet", "a1c", "metformin"]),
+    ("High Blood Pressure", ["blood pressure", "bpmed", "hbp"]),
+    ("Kidney Health", ["kidney"]),
+    ("Heart & Circulation", ["heart", "circulation", "cardio", "nitric", "nitrate", "fix flow", "blood flow"]),
+    ("Erectile Dysfunction", ["erectile", "arousal", "libido"]),
+    ("Neuropathy", ["neuropathy"]),
+    ("Liver", ["liver", "dad bod"]),
+    ("Prostate", ["prostate"]),
+    ("Weight Loss", ["weight", "bloat", "water retention", "fluid retention", "puffi", "puffy"]),
+    ("Menopause", ["menopause", "midlife"]),
+    ("Skin & Aging", ["skin", "aging", "glow", "sagging", "hair", "tired appearance", "anti aging", "anti-aging"]),
+    ("Energy & Fatigue", ["energy", "fatigue", "lownergy", "brain fog", "stress", "anxiety", "cortisol"]),
+    ("Detox & Recovery", ["detox", "toxin", "hangover", "alcohol", "microplastic", "recovery", "oxidative", "immune", "inflammation"]),
+    ("Glutathione Benefits", ["glutathione", "gluta", "antioxidant", "nutrient", "iv"]),
+    ("Supplement Quality / Price", ["quality", "scam", "overpriced", "underdosed", "dosage", "supps", "supplement",
+                                    "price", "expensive", "cost", "absorption", "potent", "affordable", "real moringa"]),
+    ("Sale / Offer", ["sale", "black friday", "deal", "offer"]),
+    ("Testimonial", ["testimonial", "transformation", "results", "consistency", "timeline"]),
+]
+
+
+def angle_family(label):
+    if not label:
+        return None
+    low = label.lower()
+    for fam, keys in ANGLE_FAMILIES:
+        if any(k in low for k in keys):
+            return fam
+    return "Other"
 
 FORMATS = {
     "longformstaticscript": "Long-Form Static", "lfs": "Long-Form Static",
@@ -110,7 +158,7 @@ STATIC_FORMATS = {"Static", "Long-Form Static"}
 VIDEO_FORMATS = {"Video", "VSL", "UGC", "AI Avatar", "AI Characters", "AI Authority",
                  "Movie", "Song Ad", "B-Roll", "Hook/Lead", "TikTok Style", "Doctor",
                  "Warehouse", "Organic", "Faceless", "Claymation", "AI UGC",
-                 "3D Animation", "Unboxing"}
+                 "3D Animation", "Unboxing", "AI Other"}
 
 
 def media_type(fmt, name: str) -> Optional[str]:
@@ -184,10 +232,23 @@ def _hook_text(tokens: list) -> Optional[str]:
     return text.upper() or None
 
 
+AFFILIATE = re.compile(
+    r"^(Beetroot|Moringa|Glutathione|Lymphoria|Magnesium)_(\d{6})_([^_]+)_(\d{2,3})_(.+?)_([A-Za-z-]+)_(\d{1,3})s",
+    re.I)
+
+
 def parse_ad_name(name: str, campaign: Optional[str] = None,
                   adset: Optional[str] = None) -> dict:
     out = _parse(name, campaign, adset)
     out["media"] = media_type(out.get("format"), name)
+    raw_angle = out.get("angle")
+    out["angle_detail"] = raw_angle
+    out["angle"] = angle_family(raw_angle)
+    aw = out.get("awareness")
+    if aw in STAGES:
+        out["stage"], out["awareness"] = aw, None
+    elif aw:
+        out["awareness"] = AWARENESS_LABELS.get(aw)   # NN -> None
     return out
 
 
@@ -204,6 +265,24 @@ def _parse(name: str, campaign: Optional[str] = None,
     m = re.search(r"[\s._](\d{1,2})$", raw)
     if m:
         out["copy_no"] = m.group(1)
+
+    # Affiliate creator uploads: Beetroot_260701_itsmrcheers_008_Flash-sale_Faceless_10s
+    m = AFFILIATE.match(raw)
+    if m:
+        prod, _d, handle, num, angle, fmt, _sec = m.groups()
+        out.update({
+            "convention": "affiliate", "agency": "Affiliates", "creator": handle,
+            "product": dict(PRODUCT_WORDS).get(prod.lower(), prod.title()),
+            "angle": ANGLES.get(_key(angle), angle.replace("-", " ").replace("_", " ").title()),
+            "format": FORMATS.get(_key(fmt), fmt.title()),
+            "concept": f"{handle} #{num}",
+        })
+        return out
+
+    # Two names joined by " / " (an ad renamed by appending a second convention):
+    # parse the first, which carries the creative id.
+    if " / " in raw:
+        raw = raw.split(" / ")[0].strip()
 
     # --- Creator (Trybe) ads: Name_Product_Angletrybe=hash
     if "trybe=" in raw.lower():
@@ -250,8 +329,14 @@ def _parse(name: str, campaign: Optional[str] = None,
         if up in BUILD and out["build"] is None:
             out["build"] = {"N": "NEW"}.get(up, up)
             continue
+        if up in STAGES and out.get("stage") is None:
+            out["stage"] = up
+            continue
         if up in AWARENESS and out["awareness"] is None:
             out["awareness"] = up
+            continue
+        if up in FUNNEL_TOKENS:
+            out["funnel"] = FUNNEL_TOKENS[up]
             continue
         k = _key(tt)
         if out["angle"] is None and k in ANGLES:
@@ -259,6 +344,9 @@ def _parse(name: str, campaign: Optional[str] = None,
             continue
         if out["format"] is None and k in FORMATS:
             out["format"] = FORMATS[k]
+            continue
+        if out["format"] is None and re.match(r"^ai[a-z]{3,}", k) and not tt.isupper():
+            out["format"] = "AI Other"   # AIFounderLuca, AIDoctor… — AI-generated talent
             continue
         if out["format"] is None and k.startswith("ugc") and len(k) > 3:
             out["format"] = "UGC"   # UGCLeslie, UGCEric — creator glued on
@@ -301,18 +389,32 @@ def _parse(name: str, campaign: Optional[str] = None,
     anchor = max(i for i in (ver_idx, cid_idx, -1) if i is not None)
     if anchor >= 0 and anchor < len(tokens) - 1:
         tail = tokens[anchor + 1:]
-        # ID-first names put angle/awareness/format/product after the version;
-        # drop leading structured tokens so the concept is the hook itself.
-        while tail:
-            t = tail[0].strip()
-            k = _key(t)
-            if (not t or t.upper() in AWARENESS or k in ANGLES or k in FORMATS
-                    or t.upper() in BUILD or t.upper() in {"NONE", "BOTH", "FRMT", "MSG", "NO", "DN", "RB", "BR"}
-                    or k in dict(PRODUCT_WORDS) or t in {"Rosabella", "Competitor", "Primecell", "Lymphoria", "Purelia"}
-                    or VERSION.match(t)):
-                tail = tail[1:]
-                continue
-            break
+        # Between the version and the hook sit, in order: angle, awareness /
+        # testing phase / funnel codes, format, then one talent-or-product
+        # token (Rosabella, RB, Competitor, Metabolae, Eeskin…). Skip by shape.
+        def skippable(t):
+            k, up = _key(t), t.upper()
+            return (not t or up in AWARENESS or up in FUNNEL_TOKENS or up in FILLER or up in BUILD
+                    or k in ANGLES or k in FORMATS or VERSION.match(t) or re.search(r"\d", t)
+                    or k in dict(PRODUCT_WORDS))
+        i = 0
+        while i < len(tail) and skippable(tail[i].strip()):
+            i += 1
+        # A CamelCase angle the vocabulary doesn't know yet (e.g. "NitratePreservation")
+        if i < len(tail) and re.fullmatch(r"(?:[A-Z][a-z]+){2,}", tail[i].strip()) and len(tail) - i > 3:
+            i += 1
+            while i < len(tail) and skippable(tail[i].strip()):
+                i += 1
+        # Format codes not in the vocabulary: AI*/UGC*/…Animation
+        if i < len(tail) and re.match(r"(?i)^(ai|a\.i|ugc|.*animation|.*broll)", tail[i].strip()) and len(tail) - i > 3:
+            i += 1
+        # Talent / product token when it is a single capitalised word and the
+        # remaining hook still has words.
+        if (out["convention"] if out.get("convention") else ("id_first" if cid_idx == 0 else "")) == "id_first" \
+                and i < len(tail) and re.fullmatch(r"[A-Z][A-Za-z]+|[A-Z]{2}", tail[i].strip()) and len(tail) - i > 3 \
+                and not tail[i].isupper() or (i < len(tail) and tail[i].strip() in {"RB", "Rosabella", "Competitor"}):
+            i += 1
+        tail = tail[i:]
         out["concept"] = _hook_text(tail)
     if out["concept"] is None and out["creative_id"]:
         out["concept"] = out["creative_id"]
@@ -322,27 +424,27 @@ def _parse(name: str, campaign: Optional[str] = None,
 # --- Coverage / self-test ---------------------------------------------------
 FIXTURES = [
     ("BR_HighCholesterol_PDA_LongFormStaticScript_No_NO_PR_NEW_PRME609_V1_I_FILL_340_STATIN_PRESCRIPTIONS_A_WEEK.1",
-     {"creative_id": "PRME609", "agency": "PR", "angle": "High Cholesterol", "awareness": "PDA", "media": "Static",
+     {"creative_id": "PRME609", "agency": "PR", "angle": "High Cholesterol", "awareness": "Problem aware", "media": "Static",
       "format": "Long-Form Static", "product": "Beetroot", "version": "V1", "build": "NEW",
       "concept": "I FILL 340 STATIN PRESCRIPTIONS A WEEK"}),
     ("MX146_NEW_NONE_V1_HighCholesterol_NN_MOVIE_Rosabella_MORNING,_MA'AM._I'VE_GOT_ANOTHER_ONE_FOR_YOU._2",
      {"creative_id": "MX146", "agency": "MX", "angle": "High Cholesterol", "format": "Movie",
       "convention": "id_first", "concept": "MORNING, MA'AM. I'VE GOT ANOTHER ONE FOR YOU", "media": "Video"}),
     ("CA683_VAR_NONE_V4_HighCholesterol_TP3_AICharacters_RB_Hey_Hey_Get_Your_Hands_Off_Him",
-     {"creative_id": "CA683", "agency": "CA", "build": "VAR", "version": "V4", "awareness": "TP3",
+     {"creative_id": "CA683", "agency": "CA", "build": "VAR", "version": "V4", "stage": "TP3",
       "format": "AI Characters", "concept": "HEY HEY GET YOUR HANDS OFF HIM"}),
     ("HannaGlenn_Glutathione_DullSkintrybe=f6cb19e9",
-     {"convention": "creator", "creator": "Hanna Glenn", "product": "Glutathione", "angle": "Dull Skin"}),
+     {"convention": "creator", "creator": "Hanna Glenn", "product": "Glutathione", "angle": "Skin & Aging", "angle_detail": "Dull Skin"}),
     ("BR_Dad_Bod_/_Fatty_liver_PR___JA__JA005_6_SURGEONS_HAVE_A_NICKNAME_FOR_THE_CLASSIC_DAD_BOD._1",
-     {"creative_id": "JA005", "agency": "JA", "angle": "Dad Bod / Fatty Liver", "awareness": "PR"}),
+     {"creative_id": "JA005", "agency": "JA", "angle": "Liver", "awareness": "Product aware"}),
     ("BR_Sale_NO_LongFormStaticScript_MA_CZ_N_No_CH018v38a1_V1_ONE_CAPSULE_A_DAY._THAT_IS_THE_WHOLE_HABIT_2",
-     {"creative_id": "CH018v38a1", "agency": "CH", "angle": "Sale", "awareness": "MA"}),
+     {"creative_id": "CH018v38a1", "agency": "CH", "angle": "Sale / Offer", "awareness": "Most aware"}),
     ("MRG_WeightLoss_UA_Video___MOVIE_MX002_V1_WAIT._IS_THAT_SHARON?",
      {"creative_id": "MX002", "agency": "MX", "angle": "Weight Loss", "format": "Video"}),
     ("Rosabella_WeightLoss_SA_Static_NONE_MRG_TA_NEW_TA004_V1_MY_SISTER_STARTED_TAKING_OZEMPIC_IN_JUNE_2025.1",
      {"creative_id": "TA004", "agency": "TA", "angle": "Weight Loss", "format": "Static"}),
     ("JK178_VAR_NONE_V1_BloodSugar_NN_Doctor_RB_5_Señales_De_Advertencia 3",
-     {"creative_id": "JK178", "angle": "Blood Sugar", "format": "Doctor", "awareness": "NN"}),
+     {"creative_id": "JK178", "angle": "Blood Sugar", "format": "Doctor", "awareness": None}),
     ("BR_HighBloodPressure_PDA_AIAVATARdeepfake_No_CH_NP_Original_NP135c-v2_V2_DO_NOT_BUY_ROSABELLA_BEETROOT.2",
      {"creative_id": "NP135c-v2", "agency": "NP", "angle": "High Blood Pressure", "format": "AI Avatar"}),
 ]

@@ -163,6 +163,10 @@ def normalise(rows: list, created: dict, thumbs: dict = None) -> list:
             "impressions": _f(r.get("impressions")),
             "clicks": _f(r.get("clicks")),
             "link_clicks": _f(r.get("inline_link_clicks")),
+            # Video funnel; None when the export predates these columns so the
+            # browser can tell "no data" from "zero plays".
+            "v3s": None if r.get("v3s") is None else _f(r.get("v3s")),
+            "thru": None if r.get("thru") is None else _f(r.get("thru")),
             "rev": None if r.get("action_values") is None else _action(r.get("action_values")),
             "txns": _action(r.get("actions")),
         }
@@ -174,7 +178,10 @@ def normalise(rows: list, created: dict, thumbs: dict = None) -> list:
             rec = by[key] = {"m": {k: (None if v is None else 0.0) for k, v in m.items()}, "ids": {}, "camps": {},
                               "accts": {}, "first": None}
         for k, v in m.items():
-            if v is None or rec["m"][k] is None:
+            if k in ("v3s", "thru"):
+                if v is not None:
+                    rec["m"][k] = (rec["m"][k] or 0) + v
+            elif v is None or rec["m"][k] is None:
                 rec["m"][k] = None
             else:
                 rec["m"][k] += v
@@ -240,7 +247,7 @@ def rows_from_csv(paths: list, account: str = None) -> tuple[list, dict]:
         with open(p, newline="", encoding="utf-8-sig") as fh:
             for r in csv.DictReader(fh):
                 g = lambda *ks: next((r[k] for k in ks if k in r and r[k] not in (None, "")), None)
-                ad_id = g("Ad ID", "Ad Id") or ""
+                ad_id = g("Ad ID", "Ad Id", "[Column ad_id]") or ""
                 adset = g("Ad set name", "Ad Set Name") or ""
                 link = g("Link clicks", "Link Clicks")
                 purchases = g("Purchases", "Website purchases")
@@ -261,6 +268,8 @@ def rows_from_csv(paths: list, account: str = None) -> tuple[list, dict]:
                     "impressions": g("Impressions"),
                     "clicks": g("Clicks (all)", "Clicks"),
                     "inline_link_clicks": link,
+                    "v3s": g("3-second video plays", "3-Second Video Plays"),
+                    "thru": g("ThruPlays", "15-second ThruPlays"),
                     "actions": [{"action_type": PURCHASE_ACTION, "value": purchases or 0}],
                     "action_values": ([{"action_type": PURCHASE_ACTION, "value": value}]
                                       if value is not None else None),
@@ -281,6 +290,10 @@ def main():
                          "optionally a period key (e.g. p0:act_123=file.csv); repeatable")
     ap.add_argument("--period", action="append", default=[], metavar="KEY=START..END",
                     help="declare a period window, e.g. p0=2026-08-31..2026-09-28; repeatable")
+    ap.add_argument("--daily-csv", action="append", default=[], metavar="ACT_ID=FILE",
+                    help="campaign-level export broken down by Day; feeds the daily trend chart")
+    ap.add_argument("--momentum", metavar="LATEST,PREVIOUS",
+                    help="period keys compared on the Momentum tab, e.g. pA,pB")
     ap.add_argument("--view", action="append", default=[], metavar="ID|LABEL|KEY,KEY",
                     help="a selectable period view made of non-overlapping windows; first is the default")
     args = ap.parse_args()
@@ -363,6 +376,7 @@ def main():
         "ad_accounts": AD_ACCOUNTS,
         "ad_count": len(ads),
         "periods": periods,
+        "momentum": (dict(zip(("latest", "previous"), args.momentum.split(","))) if args.momentum else None),
         "views": [dict(zip(("id", "label", "keys"), (v.split("|")[0], v.split("|")[1], v.split("|")[2].split(","))))
                   for v in args.view],
         "has_revenue": has_rev,
@@ -380,22 +394,62 @@ def main():
         # Only additive metrics ship; ratios are recomputed in the browser after
         # periods are merged (a ratio of sums, never a sum of ratios).
         a["metrics"] = {k: v for k, v in a["metrics"].items()
-                        if v is not None and k in ("spend", "impressions", "clicks", "link_clicks", "rev", "txns")}
-        for k in ("impressions", "clicks", "link_clicks", "txns"):
+                        if v is not None and k in ("spend", "impressions", "clicks", "link_clicks", "rev", "txns", "v3s", "thru")}
+        for k in ("impressions", "clicks", "link_clicks", "txns", "v3s", "thru"):
             if k in a["metrics"]:
                 a["metrics"][k] = int(round(a["metrics"][k]))
-        for k in ("meta_ad_ids", "ad_count", "preview_link", "thumbnail_url", "build", "copy_no", "convention"):
+        ids = a.pop("meta_ad_ids", None) or []
+        if ids and ids[0]:
+            a["aid"] = ids[0]   # top-spending ad id, for the Ads Manager link
+            act = next((k for k, v in AD_ACCOUNTS.items() if v == a.get("account")), None)
+            if act:
+                a["act"] = act[4:]
+        for k in ("ad_count", "preview_link", "thumbnail_url", "build", "copy_no", "launch_date", "campaigns"):
             a.pop(k, None)
     OUT.parent.mkdir(parents=True, exist_ok=True)
+    if args.daily_csv:
+        # Daily totals per account and product (product read from the
+        # campaign name). Small, so it ships as its own file.
+        from parse_ad_name import parse_campaign
+        agg = {}
+        for spec in args.daily_csv:
+            act, path = spec.split("=", 1)
+            with open(path, newline="", encoding="utf-8-sig") as fh:
+                for r in csv.DictReader(fh):
+                    day = (r.get("Day") or r.get("Reporting starts") or "")[:10]
+                    if not day:
+                        continue
+                    prod = parse_campaign(r.get("Campaign name") or "")["product"] or "Other"
+                    key = (day, AD_ACCOUNTS.get(act, act), prod)
+                    v = agg.setdefault(key, [0.0, 0.0, 0.0])
+                    v[0] += _f(r.get("Amount spent (USD)"))
+                    v[1] += _f(r.get("Purchases conversion value"))
+                    v[2] += _f(r.get("Purchases"))
+        daily = [{"d": d, "account": a, "product": p, "spend": round(v[0], 2), "rev": round(v[1], 2), "txns": int(v[2])}
+                 for (d, a, p), v in sorted(agg.items())]
+        (OUT.parent / "daily.json").write_text(json.dumps(daily, separators=(",", ":")))
+        manifest["daily_file"] = "daily.json"
     if periods:
         # One ads file per period keeps every file small (the GitHub web
         # uploader and browser bridge cap single files) and lets new windows
         # be added without rewriting old ones. latest.json lists them.
+        # Large periods (e.g. year-to-date) are split into ~8MB parts.
+        CHUNK = 8_000_000
+        for old in OUT.parent.glob("ads_*.json"):
+            old.unlink()
         files = []
         for pk in [p["key"] for p in periods]:
-            name = f"ads_{pk}.json"
-            (OUT.parent / name).write_text(json.dumps([a for a in ads if a.get("p") == pk], separators=(",", ":")))
-            files.append(name)
+            rows = [json.dumps(a, separators=(",", ":")) for a in ads if a.get("p") == pk]
+            parts, cur, size = [], [], 0
+            for r in rows:
+                if cur and size + len(r) > CHUNK:
+                    parts.append(cur); cur, size = [], 0
+                cur.append(r); size += len(r) + 1
+            parts.append(cur)
+            for i, part in enumerate(parts):
+                name = f"ads_{pk}.json" if len(parts) == 1 else f"ads_{pk}_{i + 1}.json"
+                (OUT.parent / name).write_text("[" + ",".join(part) + "]")
+                files.append(name)
         manifest["ads"] = []
         manifest["ad_files"] = files
     OUT.write_text(json.dumps(manifest, separators=(",", ":")))
