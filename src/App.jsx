@@ -556,7 +556,7 @@ export default function Dashboard() {
   const closeModal = () => setModalState(s => ({ ...s, open: false }));
 
   useEffect(() => {
-    fetch(`${import.meta.env.BASE_URL}data/latest.json`)
+    fetch(`${import.meta.env.BASE_URL}data/latest.json`, { cache: "no-cache" })
       .then(r => {
         if (!r.ok) throw new Error(`${r.status}: ${r.statusText}`);
         return r.json();
@@ -565,14 +565,14 @@ export default function Dashboard() {
         // Per-period ad files (see scripts/fetch_meta.py); concatenated here.
         if (m.ad_files?.length) {
           const parts = await Promise.all(m.ad_files.map(f =>
-            fetch(`${import.meta.env.BASE_URL}data/${f}`).then(r => {
+            fetch(`${import.meta.env.BASE_URL}data/${f}?v=${encodeURIComponent(m.generated_at || "")}`).then(r => {
               if (!r.ok) throw new Error(`${f}: ${r.status}`);
               return r.json();
             })));
           m = { ...m, ads: parts.flat() };
         }
         if (m.daily_file) {
-          m.daily = await fetch(`${import.meta.env.BASE_URL}data/${m.daily_file}`).then(r => r.ok ? r.json() : []).catch(() => []);
+          m.daily = await fetch(`${import.meta.env.BASE_URL}data/${m.daily_file}?v=${encodeURIComponent(m.generated_at || "")}`).then(r => r.ok ? r.json() : []).catch(() => []);
         }
         setManifest(m);
       })
